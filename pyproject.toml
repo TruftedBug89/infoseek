@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "infoseek"
+version = "0.3.0"
+description = "Keyless Tavily-style web research for AI agents: 15 engines, prompt-injection guard, LLM-ready context bundles"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "TruftedBug89" }]
+keywords = ["search", "web-research", "rag", "agent", "llm", "tavily", "keyless", "scraping", "prompt-injection"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "trafilatura>=1.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://github.com/TruftedBug89/infoseek"
+Repository = "https://github.com/TruftedBug89/infoseek"
+Issues = "https://github.com/TruftedBug89/infoseek/issues"
+
+[project.scripts]
+infoseek = "infoseek.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/infoseek"]
+
+[tool.pytest.ini_options]
+markers = ["live: network tests (run with -m live)"]
+addopts = "-m 'not live'"
+testpaths = ["tests"]
