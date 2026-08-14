@@ -8,7 +8,7 @@ async def main():
     print("== 1. search ==")
     results = await infoseek.search("retrieval augmented generation", n=4)
     for r in results:
-        print(f"  [{r.source}] {r.title[:70]}")
+        print(f"  [{r['source']}] {r['title'][:70]}")
 
     print("\n== 2. ask (LLM-ready context bundle) ==")
     bundle = await infoseek.ask("why is redis faster than postgres", n=4,

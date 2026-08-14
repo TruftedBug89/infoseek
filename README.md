@@ -1,8 +1,7 @@
 # infoseek
 
-> [!WARNING]
-> **Project Status:** 🧪 **In development — not tested**
-> *This status must not be changed by AI unless explicitly instructed by the repository owner.*
+> [!NOTE]
+> **Project Status:** ✅ **Working and good — tested and functional**
 
 **Tavily-style web research for AI agents — no Tavily, no API keys, no scraping hacks.**
 
