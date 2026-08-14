@@ -1,13 +1,21 @@
 ---
 name: infoseek
 description: >-
-  Tavily-style web research WITHOUT Tavily: keyless multi-engine search, top-page
-  extraction, and token-efficient context bundles for LLM answering. Use when the
-  agent needs to research a topic online, search the web, forums/social (Hacker News,
-  Reddit, Stack Overflow, lobste.rs), news, Wikipedia, arXiv papers, GitHub repos, or
-  code; or to extract clean text from a URL ("search for", "look up", "research",
-  "find sources", "news about", "what does X do", "ask the web"). No API keys needed;
-  optional Brave/Serper/SearXNG keys make it stronger when present.
+  Web research without Tavily: keyless multi-engine search, page extraction, and
+  token-efficient LLM-ready context bundles. Use when you need to research a topic
+  online, search the web, forums/social (Hacker News, Reddit, Stack Overflow,
+  lobste.rs), news, Wikipedia, arXiv papers, GitHub repos, or code; or to extract
+  clean text from a URL ("search for", "look up", "research", "find sources", "news
+  about", "what does X do", "ask the web"). No API keys needed; optional
+  Brave/Serper/SearXNG keys make it stronger when present.
+version: 0.3.0
+author: TruftedBug89
+license: MIT
+platforms: [linux, macos, windows]
+metadata:
+  hermes:
+    tags: [search, web-research, rag, keyless, prompt-injection, extraction, tavily]
+    related_skills: [arxiv]
 ---
 
 # infoseek

@@ -197,6 +197,33 @@ await infoseek.ask("tavily alternatives pricing", budget=1500)   # agent context
 await infoseek.selfcheck()                                       # 27 checks, live
 ```
 
+## Hermes Agent integration
+
+`infoseek` ships a Hermes-compatible `SKILL.md` (same layout Prime Agent uses),
+so it drops into the Hermes skills tree unchanged:
+
+```bash
+# 1. copy the skill into the Hermes skills tree (repo root IS the skill layout)
+mkdir -p ~/.hermes/skills/research/infoseek
+cp -r SKILL.md README.md src ~/.hermes/skills/research/infoseek/
+
+# 2. install the editable package into the Hermes kernel venv
+#    (venv path varies by install; find it with `head -1 $(which hermes)`)
+/usr/local/lib/hermes-agent/venv/bin/pip install -e ~/.hermes/skills/research/infoseek
+
+# 3. restart the session — `infoseek` is now importable and its CLI is wired up
+```
+
+```python
+import infoseek
+await infoseek.ask("tavily alternatives pricing", budget=1500)
+await infoseek.selfcheck()
+```
+
+The `SKILL.md` frontmatter carries `metadata.hermes.tags` / `related_skills` and
+`platforms`, so Hermes indexes it as a first-class research skill; other harnesses
+(Claude Code, Prime Agent, generic SKILL.md readers) ignore those extra fields.
+
 ## Configuration
 
 | env var | default | purpose |
