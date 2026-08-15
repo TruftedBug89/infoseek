@@ -176,9 +176,72 @@ re-checks, base64/hex payloads, instruction-shaped openings, directive density.
 
 Policy: `INFOSEEK_GUARD=block` (default) | `warn` | `off`.
 
-## Prime Agent integration
+## Harness integration
 
-`infoseek` is also a ready-made [Prime Agent](https://github.com/prime-intellect-ai/prime-agent) skill:
+`infoseek` plugs into any AI harness in three ways: as a **Python library**
+(Prime Agent, Hermes kernels), as an **MCP server** (opencode, Claude Code,
+Cursor, Windsurf, Continue, Goose — anything that speaks MCP), and as a
+**skill** (skill-aware harnesses that read `SKILL.md`).
+
+### MCP server (opencode, Claude Code, Cursor, ...)
+
+The one integration to rule them all: install once, every MCP-capable harness
+gets `search` / `ask` / `extract` / `scan` / `suggest` / `status` / `selfcheck`
+/ `run` as native tools.
+
+```bash
+pip install "infoseek[mcp] @ git+https://github.com/TruftedBug89/infoseek"  # or: pip install git+...infoseek then pip install mcp
+```
+
+**opencode** — add to `~/.config/opencode/opencode.json` (global) or
+`./opencode.json` (project):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "infoseek": {
+      "type": "local",
+      "command": ["python", "-m", "infoseek.mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Then restart opencode — the tools appear as `mcp__infoseek__search` etc.
+
+**Claude Code:**
+
+```bash
+claude mcp add infoseek -- python -m infoseek.mcp
+```
+
+**Cursor / Windsurf / Continue / Goose:** add an MCP server with command
+`python -m infoseek.mcp` (stdio) in their MCP settings UI.
+
+If `infoseek-mcp` is on `PATH`, use it directly as the command instead. On
+Windows user-site installs the scripts land in
+`%APPDATA%\Python\Python312\Scripts` — add that to `PATH` or use
+`python -m infoseek.mcp`.
+
+### Skill layouts
+
+The repo root **is** the skill directory, so skill-aware harnesses just point
+at it:
+
+| harness | location |
+|---|---|
+| **opencode** | auto-loads `~/.agents/skills/<name>/SKILL.md` — clone there, no config needed |
+| Prime Agent | `~/.agents/skills/infoseek` |
+| Hermes | `~/.hermes/skills/research/infoseek` |
+| Claude Code | `~/.claude/skills/infoseek` |
+
+The `SKILL.md` frontmatter carries `name` + `description` (opencode, Claude
+Code), `platforms`, and `metadata.hermes` (Hermes) — unknown extra fields are
+ignored by the other harnesses.
+
+### Prime Agent integration
 
 ```bash
 # 1. clone the repo into your skills dir (the repo root IS the skill layout)
@@ -196,10 +259,7 @@ await infoseek.ask("tavily alternatives pricing", budget=1500)   # agent context
 await infoseek.selfcheck()                                       # 27 checks, live
 ```
 
-## Hermes Agent integration
-
-`infoseek` ships a Hermes-compatible `SKILL.md` (same layout Prime Agent uses),
-so it drops into the Hermes skills tree unchanged:
+### Hermes Agent integration
 
 ```bash
 # 1. copy the skill into the Hermes skills tree (repo root IS the skill layout)
@@ -218,10 +278,6 @@ import infoseek
 await infoseek.ask("tavily alternatives pricing", budget=1500)
 await infoseek.selfcheck()
 ```
-
-The `SKILL.md` frontmatter carries `metadata.hermes.tags` / `related_skills` and
-`platforms`, so Hermes indexes it as a first-class research skill; other harnesses
-(Claude Code, Prime Agent, generic SKILL.md readers) ignore those extra fields.
 
 ## Configuration
 

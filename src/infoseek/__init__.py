@@ -29,7 +29,6 @@ Query routing (prefixes / site: filters):
 
 __version__ = "0.3.0"
 
-__version__ = "0.3.0"
 import asyncio, os, re
 from urllib.parse import urlparse
 

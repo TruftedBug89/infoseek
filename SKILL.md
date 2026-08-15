@@ -39,11 +39,19 @@ pip install -e ".[dev]"
 Optional env vars (never required, read at call time): `BRAVE_API_KEY`,
 `SERPER_API_KEY`, `SEARXNG_URL` — matching engines light up automatically.
 
-Drop-in skill layouts: the repo root IS the skill directory for
-[Prime Agent](https://github.com/prime-intellect-ai/prime-agent) (`~/.agents/skills/infoseek`)
-and Hermes (`~/.hermes/skills/research/infoseek`, `SKILL.md` frontmatter carries
-`metadata.hermes.tags` / `related_skills`). Other harnesses (Claude Code, opencode)
-ignore the extra fields — point them at the repo root and `pip install -e .`.
+Drop-in skill layouts: the repo root IS the skill directory —
+[opencode](https://opencode.ai) auto-loads `~/.agents/skills/infoseek/SKILL.md`,
+[Prime Agent](https://github.com/prime-intellect-ai/prime-agent) uses
+`~/.agents/skills/infoseek`, Hermes uses `~/.hermes/skills/research/infoseek`
+(frontmatter carries `metadata.hermes.tags` / `related_skills`), Claude Code
+uses `~/.claude/skills/infoseek`. Unknown extra frontmatter fields are ignored
+by the other harnesses.
+
+Prefer the **MCP server** when the harness supports it: `pip install
+"infoseek[mcp]"` then register command `python -m infoseek.mcp` (opencode:
+`mcp.infoseek` in `opencode.json`; Claude Code: `claude mcp add infoseek -- python -m infoseek.mcp`).
+Exposes `search`, `ask`, `extract`, `scan`, `suggest`, `status`, `selfcheck`,
+`run` as native tools with no API keys.
 
 ## Call from kernel (Python API)
 

@@ -24,12 +24,44 @@ into THAT venv — your harness's `pip` must see the package.
 The repo root IS the skill layout. Symlink or copy it into your skills tree:
 
 ```bash
-mkdir -p ~/.agents/skills && ln -s $(pwd) ~/.agents/skills/infoseek   # Prime Agent
+mkdir -p ~/.agents/skills && ln -s $(pwd) ~/.agents/skills/infoseek   # Prime Agent + opencode (auto-loads this path)
 mkdir -p ~/.hermes/skills/research && ln -s $(pwd) ~/.hermes/skills/research/infoseek  # Hermes
+mkdir -p ~/.claude/skills && ln -s $(pwd) ~/.claude/skills/infoseek   # Claude Code
 ```
 
 Other harnesses (Claude Code, opencode, etc.): just `pip install -e .` and the
 `infoseek` module + CLI are importable from anywhere.
+
+### As an MCP server (opencode, Claude Code, Cursor, Windsurf, ...)
+
+This is the recommended integration for MCP-capable harnesses — the whole
+toolkit becomes native tools (`search`, `ask`, `extract`, `scan`, `suggest`,
+`status`, `selfcheck`, `run`), no API keys.
+
+```bash
+pip install "infoseek[mcp] @ git+https://github.com/TruftedBug89/infoseek"
+# or from a checkout: pip install -e ".[mcp]"
+```
+
+Then register the stdio server (command `python -m infoseek.mcp`, or
+`infoseek-mcp` if that's on PATH):
+
+- **opencode**: in `~/.config/opencode/opencode.json` (or `./opencode.json`):
+  ```json
+  {
+    "$schema": "https://opencode.ai/config.json",
+    "mcp": {
+      "infoseek": { "type": "local", "command": ["python", "-m", "infoseek.mcp"], "enabled": true }
+    }
+  }
+  ```
+  Restart opencode; tools appear as `mcp__infoseek__search` etc.
+- **Claude Code**: `claude mcp add infoseek -- python -m infoseek.mcp`
+- **Cursor / Windsurf / Continue / Goose**: MCP settings → stdio command
+  `python -m infoseek.mcp`.
+
+The server lives in `src/infoseek/mcp.py`; run a raw handshake check with
+`python -m infoseek.mcp` and feed it an `initialize` JSON-RPC message.
 
 ## Verify it works
 
