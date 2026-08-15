@@ -187,7 +187,8 @@ Cursor, Windsurf, Continue, Goose — anything that speaks MCP), and as a
 
 The one integration to rule them all: install once, every MCP-capable harness
 gets `search` / `ask` / `extract` / `scan` / `suggest` / `status` / `selfcheck`
-/ `run` as native tools.
+/ `run` as native tools. **MCP is additive** — the Prime Agent / Hermes Python
+API and skill paths keep working exactly as before, no MCP required for them.
 
 ```bash
 pip install "infoseek[mcp] @ git+https://github.com/TruftedBug89/infoseek"  # or: pip install git+...infoseek then pip install mcp
@@ -243,6 +244,9 @@ ignored by the other harnesses.
 
 ### Prime Agent integration
 
+Unchanged by the MCP work — Prime Agent keeps using infoseek as a plain
+Python library in its kernel, **no MCP involved**:
+
 ```bash
 # 1. clone the repo into your skills dir (the repo root IS the skill layout)
 git clone https://github.com/TruftedBug89/infoseek ~/.agents/skills/infoseek
@@ -258,6 +262,10 @@ import infoseek
 await infoseek.ask("tavily alternatives pricing", budget=1500)   # agent context
 await infoseek.selfcheck()                                       # 27 checks, live
 ```
+
+Both integration paths can be live at the same time: Prime Agent imports the
+library directly, while opencode/Claude Code/Cursor talk to the same install
+over MCP.
 
 ### Hermes Agent integration
 
