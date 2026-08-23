@@ -30,7 +30,8 @@ def cmd_search(a: argparse.Namespace) -> None:
     import infoseek
 
     async def go():
-        results = await infoseek.search(a.query, n=a.n, engines=a.engines, fresh=a.fresh)
+        results = await infoseek.search(a.query, n=a.n, engines=a.engines, fresh=a.fresh,
+                                        freshness=a.freshness)
         if a.json:
             _FIELDS = ("title", "url", "snippet", "source", "rank", "date", "extra", "score")
             print(json.dumps([{k: r.get(k) for k in _FIELDS} for r in results], indent=2))
@@ -51,8 +52,10 @@ def cmd_search(a: argparse.Namespace) -> None:
 
 def cmd_ask(a: argparse.Namespace) -> None:
     import infoseek
-    print(asyncio.run(infoseek.ask(a.query, n=a.n, extract_top=a.extract_top,
-                                   budget=a.budget, fresh=a.fresh)))
+    out = asyncio.run(infoseek.ask(a.query, n=a.n, extract_top=a.extract_top,
+                                   budget=a.budget, fresh=a.fresh,
+                                   freshness=a.freshness, format="json" if a.json else "text"))
+    print(out if isinstance(out, str) else json.dumps(out, indent=2))
 
 
 def cmd_extract(a: argparse.Namespace) -> None:
@@ -93,6 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("search", help="multi-engine web search")
     s.add_argument("query", nargs="?", help="search query (or use --query)")
     _add_common(s)
+    s.add_argument("--freshness", help="recency limit: day|week|month|year|7d")
     s.set_defaults(func=cmd_search)
 
     a = sub.add_parser("ask", help="search + extract top pages into an LLM-ready context bundle")
@@ -101,6 +105,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--extract-top", type=int, default=2)
     a.add_argument("--budget", type=int, default=2500, help="approx output token budget")
     a.add_argument("--fresh", action="store_true", help="bypass cache")
+    a.add_argument("--freshness", help="recency limit: day|week|month|year|7d")
+    a.add_argument("--json", action="store_true", help="structured bundle with source/guard metadata")
     a.set_defaults(func=cmd_ask)
 
     e = sub.add_parser("extract", help="clean text from a URL (guard denies injection content)")
@@ -143,6 +149,12 @@ def _add_common(s: argparse.ArgumentParser) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     p = build_parser()
     a = p.parse_args(argv)
     if a.command is None:

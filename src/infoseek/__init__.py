@@ -17,17 +17,26 @@ blocked sources, extract() replaces them with a denial note.
 Public API (all async):
     infoseek.scan(text, url='') -> Verdict  # prompt-injection guard (sync, cached)
     await infoseek.search(query, n=6, engines="auto", fresh=False) -> list[dict]
+    await infoseek.smart_search(query, n=6) -> list[dict]   # auto-reformulates poor results
     await infoseek.ask(query, n=5, extract_top=2, budget=2500, fresh=False) -> str
     await infoseek.extract(url, max_chars=2000, fresh=False) -> str
     await infoseek.suggest(query) -> str
     await infoseek.status() -> str
 
+Debugging / troubleshooting helpers:
+    await infoseek.search_error("UnsupportedArchError: bailingmoe3")
+    await infoseek.search_compat("LM Studio bailingmoe3")
+    await infoseek.changelog("lmstudio-ai/lm-studio")
+
 Query routing (prefixes / site: filters):
     hn:, so:, news:, wiki:, arxiv:, gh:, code:, reddit:, lobsters:, marginalia:,
     ddg:, brave:, serper:, searxng:, site:reddit.com, site:stackoverflow.com, ...
+    error: (error message + solutions), compat: (version compatibility),
+    issues:/gh_issues: (GitHub issues+PRs), prs: (pull requests),
+    releases: (GitHub release notes), changelog: (changelog pages)
 """
 
-__version__ = "0.3.0"
+__version__ = "0.5.0"
 
 import asyncio, os, re
 from urllib.parse import urlparse
@@ -43,6 +52,9 @@ def guard_module_policy():
 from .format import fmt_bundle, fmt_search, fmt_status
 from .net import PoliteClient
 from .rank import Result, clean, dedupe, merge, normalize_url, to_dicts
+from .research import (smart_search, search_error, search_compat, changelog,
+                       expand_queries, quality, normalize_error_message,
+                       focus_snippet, auto_focus)
 
 _client: PoliteClient | None = None
 _last_errors: dict = {}
@@ -64,40 +76,139 @@ def _apply_site_filter(results: list[Result], query: str) -> list[Result]:
     return [r for r in results if dom in (r.url or "").lower()]
 
 
+_FRESH_ALIASES = {"day": 1, "week": 7, "month": 31, "year": 365}
+
+
+def _freshness_days(freshness) -> float | None:
+    """Accept 'day'/'week'/'month'/'year', '7d', or an int/float number of days."""
+    if freshness is None:
+        return None
+    if isinstance(freshness, (int, float)):
+        return max(0.04, float(freshness))
+    s = str(freshness).strip().lower()
+    if s in _FRESH_ALIASES:
+        return float(_FRESH_ALIASES[s])
+    m = re.match(r"^(\d+)\s*d$", s)
+    if m:
+        return float(int(m.group(1)))
+    try:
+        return max(0.04, float(s))
+    except ValueError:
+        return None
+
+
+def _apply_freshness(results: list, days: float | None) -> list:
+    """Drop results with a parseable date older than the window; undated results stay."""
+    if not days:
+        return results
+    from datetime import date, timedelta
+    cutoff = date.today() - timedelta(days=days)
+    out = []
+    for r in results:
+        m = re.search(r"(20\d{2})-(\d{2})-(\d{2})", r.date or "")
+        if m:
+            try:
+                if date(int(m.group(1)), int(m.group(2)), int(m.group(3))) < cutoff:
+                    continue
+            except ValueError:
+                pass
+        out.append(r)
+    return out
+
+
+def _screen_snippets(results: list) -> list:
+    """Guard-screen titles+snippets: drop blocked, flag suspect. µs-fast, cached."""
+    out = []
+    for r in results:
+        v = scan((r.title or "") + "\n" + (r.snippet or ""), url=r.url)
+        if v.level == "blocked":
+            continue
+        if v.level == "suspect":
+            r.extra = ((r.extra + " · ") if r.extra else "") + "[guard:suspect]"
+        out.append(r)
+    return out
+
+
 async def search(query: str, n: int = 6, engines: str = "auto", fresh: bool = False,
-                 min_interval: float = 1.2) -> list[dict]:
+                 min_interval: float = 1.2, freshness=None, expand: bool = False) -> list[dict]:
     """Run a multi-engine search. Returns deduped, merged result dicts
-    (title, url, snippet, source, extra, date, rank)."""
+    (title, url, snippet, source, extra, date, rank).
+
+    freshness: limit recency — 'day'/'week'/'month'/'year', '7d', or days (int).
+    expand=True: if the first round scores poorly (few results / low term
+    overlap / no version numbers for version questions), automatically
+    reformulate and merge a second round (see smart_search).
+    Titles/snippets are guard-screened: blocked snippets dropped, suspect flagged."""
+    if expand:
+        return await smart_search(query, n=n, fresh=fresh)
+    days = _freshness_days(freshness)
     engines_list, q = resolve_engines(query, engines)
     if not engines_list:
         return []
     client = _get_client(min_interval)
     results, errors = await run_engines(client, q, n=max(n, 4), engines_list=engines_list,
-                                        fresh=fresh)
+                                        fresh=fresh, freshness_days=days)
     _last_errors.update(errors)
-    results = _apply_site_filter(results, query)
+    results = _apply_freshness(_apply_site_filter(results, query), days)
     merged = merge([results], n, engines_list + [e for e in KEYLESS if e not in engines_list])
-    return to_dicts(merged)
+    return to_dicts(_screen_snippets(merged))
+
+
+async def search_many(queries, n: int = 6, engines: str = "auto", fresh: bool = False,
+                      freshness=None) -> list[dict]:
+    """Run several queries concurrently and return one merged, deduped, ranked list.
+    Fan-out for iterative agent research: variant phrasings in one round-trip."""
+    queries = [q for q in (queries if isinstance(queries, (list, tuple)) else [queries]) if q and q.strip()]
+    if not queries:
+        return []
+    lists = await asyncio.gather(*[search(q, n=n, engines=engines, fresh=fresh,
+                                          freshness=freshness) for q in queries])
+    groups = [[Result(**d) for d in lst] for lst in lists]
+    order: list[str] = []
+    for g in groups:
+        for r in g:
+            if r.source not in order:
+                order.append(r.source)
+    merged = merge(groups, min(n * len(groups), 24), order)
+    return to_dicts(_screen_snippets(merged))
 
 
 async def ask(query: str, n: int = 5, extract_top: int = 2, budget: int = 2500,
-              fresh: bool = False, respect_robots: bool = True) -> str:
+              fresh: bool = False, respect_robots: bool = True, freshness=None,
+              format: str = "text") -> str | dict:
     """Tavily-style context bundle: search + extract the top pages, trimmed to a
     token budget (approx tokens ~= budget, chars = budget*4). Feed the result to
-    an LLM to synthesize the final brief answer."""
+    an LLM to synthesize the final brief answer.
+
+    freshness: 'day'/'week'/'month'/'year', '7d', or days (int).
+    format='json': returns a dict {query, context, budget_tokens, sources:[...]}
+    with per-source guard verdicts so agents can trace citations."""
+    days = _freshness_days(freshness)
     engines_list, q = resolve_engines(query, "auto")
     client = PoliteClient(min_interval=1.4, respect_robots=respect_robots)
     try:
         results, errors = await run_engines(client, q, n=max(n + 2, 6), engines_list=engines_list,
-                                            fresh=fresh)
-        results = _apply_site_filter(results, query)
+                                            fresh=fresh, freshness_days=days)
+        results = _apply_freshness(_apply_site_filter(results, query), days)
         merged = merge([results], n, engines_list + [e for e in KEYLESS if e not in engines_list])
         targets = _pick_targets(merged, q, extract_top)
         per_page = max(500, budget * 4 // max(extract_top, 1) - 250)
         extr = await extract_many(client, [r.url for r in targets], max_chars=per_page,
                                   concurrency=3, query=q)
         _last_errors.update(errors)
-        return fmt_bundle(q, merged, extr, budget_chars=budget * 4)
+        bundle = fmt_bundle(q, merged, extr, budget_chars=budget * 4)
+        if format == "json":
+            guard_by_url = {x["url"]: x.get("guard") or {} for x in extr}
+            target_urls = {r.url for r in targets}
+            sources = [{"title": r.title, "url": r.url, "source": r.source,
+                        "date": r.date, "score": round(r.score, 2),
+                        "extracted": r.url in target_urls,
+                        "guard": (guard_by_url.get(r.url) or {}).get("level")
+                                 if r.url in target_urls else None}
+                       for r in merged]
+            return {"query": q, "context": bundle, "budget_tokens": budget,
+                    "sources": sources}
+        return bundle
     finally:
         await client.close()
 
@@ -156,7 +267,11 @@ async def run(query: str, n: int = 6, engines: str = "auto", fresh: bool = False
     return fmt_search([Result(**d) for d in res])
 
 
-__all__ = ["run", "search", "ask", "extract", "suggest", "status", "selfcheck", "Result"]
+__all__ = ["run", "search", "search_many", "smart_search", "ask", "extract",
+           "suggest", "status", "selfcheck", "Result",
+           "search_error", "search_compat", "changelog",
+           "expand_queries", "quality", "normalize_error_message",
+           "focus_snippet", "auto_focus"]
 
 
 def _pick_targets(merged: list, query: str, k: int) -> list:
@@ -188,7 +303,8 @@ def _pick_targets(merged: list, query: str, k: int) -> list:
 
 async def selfcheck(verbose: bool = True) -> str:
     """Test battery: unit checks (dedupe/merge/clean/normalize), cache roundtrip,
-    live engine probes, extraction, and an ask() smoke run. Returns a report string."""
+    live engine probes (incl. GitHub issues/PRs/releases/changelog), extraction,
+    and an ask() smoke run. Returns a report string."""
     import time as _t
     from .rank import Result as _R
     rows: list[tuple[str, bool | None, str]] = []  # name, pass/fail/None(warn), detail
@@ -238,7 +354,11 @@ async def selfcheck(verbose: bool = True) -> str:
               "openalex": "transformer", "wikidata": "Tim Berners-Lee",
               "pubmed": "cancer immunotherapy", "crossref": "transformer",
               "gh": "searxng", "code": "AsyncClient",
-              "reddit": "tavily", "lobsters": "the", "marginalia": "knowledge management"}
+              "reddit": "tavily", "lobsters": "the", "marginalia": "knowledge management",
+              "gh_issues": "repo:lmstudio-ai/lm-studio bailingmoe",
+              "prs": "repo:lmstudio-ai/lm-studio bailingmoe",
+              "gh_releases": "lmstudio-ai/lm-studio",
+              "changelog": "lmstudio-ai/lm-studio"}
     client = PoliteClient(min_interval=0.8)
     try:
         for eng, q in probes.items():

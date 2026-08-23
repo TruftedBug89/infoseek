@@ -10,9 +10,13 @@ SUFFIX = re.compile(r"\s*[-|–—:]\s*[A-Z][A-Za-z0-9 .&'()]{2,40}$")
 
 # Source priority (higher = more trust at same rank). Tuned: general web + expert Q&A
 # first, forums/news after.
-PRIORITY = {"ddg": 10, "so": 9, "hn": 8, "gh": 8, "wiki": 8, "arxiv": 7, "reddit": 7,
-            "lobsters": 7, "news": 6, "code": 6, "serper": 10, "brave": 10, "searxng": 10,
-            "marginalia": 5}
+PRIORITY = {
+    "ddg": 10, "pypi": 10, "npm": 10, "crates": 10, "mdn": 10,
+    "so": 9, "hn": 8, "gh": 8, "wiki": 8, "arxiv": 8, "openalex": 8,
+    "pubmed": 8, "crossref": 7, "wikidata": 7, "reddit": 7,
+    "lobsters": 7, "news": 6, "code": 6, "yt": 6,
+    "serper": 10, "brave": 10, "searxng": 10, "marginalia": 5
+}
 
 
 @dataclass

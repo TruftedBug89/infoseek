@@ -54,25 +54,46 @@ def _json(obj) -> str:
 
 
 @mcp.tool()
-async def search(query: str, n: int = 6, engines: str = "auto", fresh: bool = False) -> str:
+async def search(query: str, n: int = 6, engines: str = "auto", fresh: bool = False,
+                 freshness: str | None = None) -> str:
     """Multi-engine web search. Returns JSON: [{title, url, snippet, source, rank, score}].
     query: search text; engine prefixes (hn:, reddit:, so:, news:, wiki:, arxiv:, gh:, code:, ...) focus the source.
-    n: max results. engines: 'auto' or comma-separated engine list. fresh: bypass the 30-min cache."""
+    n: max results. engines: 'auto' or comma-separated engine list. fresh: bypass the 30-min cache.
+    freshness: recency limit ('day'|'week'|'month'|'year'|'7d'); blocked snippets are dropped,
+    suspect ones flagged in extra."""
     try:
-        results = await infoseek.search(query, n=n, engines=engines, fresh=fresh)
+        results = await infoseek.search(query, n=n, engines=engines, fresh=fresh,
+                                        freshness=freshness)
     except Exception as e:
         return _json({"error": f"{type(e).__name__}: {e}"})
     return _json(results)
 
 
 @mcp.tool()
-async def ask(query: str, n: int = 5, extract_top: int = 2, budget: int = 2500) -> str:
+async def search_many(queries: list[str], n: int = 6, freshness: str | None = None) -> str:
+    """Run several query variants CONCURRENTLY and return one merged, deduped, ranked
+    JSON result list. Use for iterative research: multiple phrasings in one round-trip.
+    freshness: optional recency limit ('day'|'week'|'month'|'year'|'7d')."""
+    try:
+        return _json(await infoseek.search_many(queries, n=n, freshness=freshness))
+    except Exception as e:
+        return _json({"error": f"{type(e).__name__}: {e}"})
+
+
+@mcp.tool()
+async def ask(query: str, n: int = 5, extract_top: int = 2, budget: int = 2500,
+              freshness: str | None = None, format: str = "text") -> str:
     """Tavily-style context bundle: search + extract top pages, keep only the sentences
     relevant to the query, trim to a token budget. Feed the returned text to the model
     to answer the query. query: research question; engine prefixes supported.
-    budget: approx output tokens (chars = budget x 4)."""
+    budget: approx output tokens (chars = budget x 4).
+    freshness: optional recency limit ('day'|'week'|'month'|'year'|'7d').
+    format='json': returns {query, context, sources:[{url,title,guard,...}]} for
+    citation tracing instead of plain text."""
     try:
-        return await infoseek.ask(query, n=n, extract_top=extract_top, budget=budget)
+        out = await infoseek.ask(query, n=n, extract_top=extract_top, budget=budget,
+                                 freshness=freshness, format=format)
+        return out if isinstance(out, str) else _json(out)
     except Exception as e:
         return f"[[ask error: {type(e).__name__}: {e}]]"
 

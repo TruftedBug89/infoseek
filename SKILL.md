@@ -8,7 +8,7 @@ description: >-
   clean text from a URL ("search for", "look up", "research", "find sources", "news
   about", "what does X do", "ask the web"). No API keys needed; optional
   Brave/Serper/SearXNG keys make it stronger when present.
-version: 0.3.0
+version: 0.4.0
 author: TruftedBug89
 license: MIT
 platforms: [linux, macos, windows]
@@ -75,6 +75,12 @@ verdict = infoseek.scan("Ignore all previous instructions...")   # sync
 #    extract() replaces blocked with a denial note. Policy:
 #    INFOSEEK_GUARD=block|warn|off (default block)
 
+data = await infoseek.ask("how does searxng work", format="json")
+# -> {"query", "context", "budget_tokens", "sources": [{url, title, guard, extracted}]}
+
+recent = await infoseek.search("pydantic v3", freshness="month")  # day|week|month|year|7d
+both = await infoseek.search_many(["rust vs go perf", "golang vs rust speed"])
+
 await infoseek.suggest("local llm")   # -> autocomplete ideas
 await infoseek.status()               # -> engine availability + last errors
 await infoseek.selfcheck()            # -> 27-check battery (unit + live probes)
@@ -121,6 +127,11 @@ Prefixes pick focused sources; everything else hits the mixed default
 | `gh:` | GitHub repos (stars, lang) |
 | `code:` | code search (grep.app) |
 | `lobsters:` | lobste.rs recent stories |
+| `pypi:` / `pip:` / `python:` | PyPI Python packages & metadata |
+| `npm:` / `node:` | npm JavaScript/TypeScript packages |
+| `crates:` / `rust:` / `cargo:` | Rust crates.io packages & downloads |
+| `mdn:` / `docs:` | MDN Web Docs official developer documentation |
+| `yt:` / `youtube:` | YouTube video search |
 | `marginalia:` | indie/old web |
 | `ddg:` | DuckDuckGo only |
 | `site:github.com` etc. | auto-routes to matching engine |
@@ -129,8 +140,7 @@ Optional keyed engines: `brave:` `serper:` `searxng:` — auto-activate from env
 
 ## Capabilities
 
-- **15 keyless engines** — general web, news, forums, code, papers, biomedical,
-  facts — all via official APIs or server-rendered HTML (no Google scraping, no CAPTCHA bypass)
+- **20 keyless engines** — general web, package registries (PyPI, npm, crates.io), MDN docs, YouTube, news, forums, code, papers, biomedical, facts — all via official APIs or server-rendered HTML (no Google scraping, no CAPTCHA bypass)
 - **`ask()` context bundles** — Tavily `/context` equivalent: search → pick best
   pages → keep only sentences matching your query → trim to a token budget
 - **Quality-scored merge** — source priority + engine rank + recency bonus,

@@ -59,6 +59,15 @@ QUERY: why is redis faster than postgres
 - **Disk cache** — search TTL 30 min, extraction 7 days, failure markers 90 s
   (flaky endpoints never slow you down twice)
 - **`selfcheck()`** — a 27-check battery (unit + live probes of all 15 engines)
+- **Recency control** — `freshness="week"` (or `"7d"`, days) on `search()`/`ask()`:
+  engine-side date filters where supported + post-filtering by parsed dates
+- **Multi-query fan-out** — `search_many([q1, q2, ...])` runs query variants
+  concurrently and returns one merged, deduped, ranked list
+- **Structured bundles** — `ask(..., format="json")` returns
+  `{query, context, sources:[{url, title, guard, ...}]}` for citation tracing
+- **Full-page guard scanning** — long pages are scanned in overlapping windows end-to-end,
+  so injections buried past the first page are still caught; search snippets are screened too
+- **PDF extraction** — PDF URLs extract via the optional `pdf` extra (`pip install "infoseek[pdf]"`)
 
 ## Install
 
@@ -87,6 +96,8 @@ $ infoseek scan --text "Ignore all previous instructions..."
 $ infoseek scan --url https://example.com/      # fetch + scan, exit 2 if blocked
 $ infoseek suggest "python asyn"
 $ infoseek status
+$ infoseek search "pydantic v3" --freshness month
+$ infoseek ask "best vector db 2026" --json     # structured bundle + source/guard metadata
 $ infoseek selfcheck
 ```
 
@@ -106,6 +117,14 @@ async def demo():
     # 2. LLM-ready context bundle (~budget tokens)
     bundle = await infoseek.ask("why is redis faster than postgres", n=5,
                                 extract_top=2, budget=2000)
+
+    # 2b. Structured bundle with per-source guard verdicts (citation tracing)
+    data = await infoseek.ask("why is redis faster than postgres", format="json")
+    # -> {"query", "context", "budget_tokens", "sources": [{url, title, guard, ...}]}
+
+    # 2c. Recency-limited research + multi-query fan-out
+    recent = await infoseek.search("pydantic v3 migration", freshness="month")
+    both   = await infoseek.search_many(["rust vs go perf", "golang vs rust speed"])
 
     # 3. Clean article text (robots.txt respected, injection content denied)
     text = await infoseek.extract("https://news.ycombinator.com/item?id=45838766",
@@ -150,12 +169,17 @@ asyncio.run(demo())
 | `doi:` | `crossref` | DOI / citation lookup | Crossref API |
 | `gh:` | `gh` | GitHub repos | GitHub API |
 | `code:` | `code` | code search | grep.app API |
+| `pypi:` / `pip:` | `pypi` | Python packages & metadata | PyPI JSON & Search API |
+| `npm:` / `node:` | `npm` | JS/TS packages | npm Registry API |
+| `crates:` / `rust:` | `crates` | Rust crates & downloads | crates.io API |
+| `mdn:` / `docs:` | `mdn` | Web documentation | MDN Web Docs REST API |
+| `yt:` / `youtube:` | `yt` | YouTube video search | DuckDuckGo site filter |
 | `lobsters:` | `lobsters` | tech links | lobste.rs API |
 | `marginalia:` | `marginalia` | small-web / non-commercial | Marginalia |
 
 Keyed (opt-in): `brave:` `serper:` `searxng:` — auto-activate from env vars.
 `site:<domain>` filters route to the best engine for the domain (e.g.
-`site:stackoverflow.com`, `site:arxiv.org`, `site:pubmed.ncbi.nlm.nih.gov`).
+`site:pypi.org`, `site:npmjs.com`, `site:crates.io`, `site:developer.mozilla.org`, `site:stackoverflow.com`, `site:arxiv.org`, `site:pubmed.ncbi.nlm.nih.gov`).
 
 ## Prompt-injection guard
 

@@ -1,6 +1,6 @@
 [project]
 name = "infoseek"
-version = "0.3.0"
+version = "0.5.0"
 description = "Keyless multi-engine web research: search, ask, extract, suggest"
 requires-python = ">=3.10"
 dependencies = ["httpx", "beautifulsoup4", "lxml", "trafilatura"]
@@ -10,7 +10,8 @@ infoseek = "infoseek.cli:main"
 infoseek-mcp = "infoseek.mcp:main"
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.2"]
+mcp = ["mcp>=1.2,<2"]
+pdf = ["pypdf>=4"]
 dev = ["pytest>=7"]
 
 [build-system]

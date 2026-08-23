@@ -31,6 +31,18 @@ import hashlib
 import os
 import re
 
+import unicodedata
+
+# Homoglyphs commonly used to evade keyword filters
+_HOMOGLYPHS = str.maketrans({
+    '\u0430': 'a', '\u0435': 'e', '\u043e': 'o', '\u0440': 'p', '\u0441': 'c',
+    '\u0443': 'y', '\u0445': 'x', '\u0456': 'i', '\u0458': 'j', '\u0455': 's',
+    '\u0410': 'A', '\u0415': 'E', '\u041e': 'O', '\u0420': 'P', '\u0421': 'C',
+    '\u0423': 'Y', '\u0425': 'X', '\u0406': 'I', '\u0408': 'J', '\u0405': 'S',
+    '\u03b1': 'a', '\u03bf': 'o', '\u03c1': 'p', '\u03bd': 'v',
+    '\u2010': '-', '\u2011': '-', '\u2012': '-', '\u2013': '-', '\u2014': '-',
+})
+
 # ---------------------------------------------------------------- policy
 POLICY = os.environ.get("INFOSEEK_GUARD", "block").strip().lower()
 if POLICY not in ("block", "warn", "off"):
@@ -59,7 +71,8 @@ _EXFIL = re.compile(
     r" (?:text|instructions?|system prompt|prompt)s?(?: (?:from )?(?:above|below|verbatim|exactly))?"
     r"|(?:what are|what is|tell me|reply with) (?:your|the) (?:system prompt|instructions?|initial prompt)"
     r"|repeat (?:everything|the text) (?:above|you see)"
-    r"|(?:forget|ignore) (?:the )?instructions (?:and )?(?:print|output|repeat)",
+    r"|(?:forget|ignore) (?:the )?instructions (?:and )?(?:print|output|repeat)"
+    r"|!\[.*?\]\([a-z0-9+.-]+://[^\s)]*(?:prompt|token|key|cookie|exfil|session|leak|system)[^\s)]*\)",
     re.I)
 _JAILBRK = re.compile(
     r"jailbreak|do anything now|dan mode|developer mode|unrestricted (?:mode|access)"
@@ -69,11 +82,13 @@ _JAILBRK = re.compile(
     r"|end of (?:input|conversation|text)|now respond as|respond as (?:dan|a different|the assistant)",
     re.I)
 _TAGS = re.compile(
-    r"</?(?:system|instructions?|developer|prompt)>?|</system[ >]"
+    r"</?(?:system|instructions?|developer|prompt|system-instruction)>?|</system[ >]"
     r"|<\|s\||<\|im_start\||<\|system\||<\|user\|>?"
     r"|(?:##|###|\[)\s*system(?:\]|\s*prompt)|\[system\]|\[instructions?\]"
+    r"|<<SYS>>|\[INST\]|\[/INST\]"
+    r"|<!--.*?instructions?.*?-->"
     r"|(?:^|[\s(\[])system[:\])]",
-    re.I)
+    re.I | re.DOTALL)
 _FORCE = re.compile(
     r"you must (?:now )?|you will (?:now )?(?:obey|follow|respond|act)"
     r"|you are (?:required|obligated|programmed) to"
@@ -92,7 +107,7 @@ _OPSEC = re.compile(
 _SPACED = re.compile(r"i\s+g\s+n\s+o\s+r\s+e|i\s+n\s+s\s+t\s+r\s+u\s+c\s+t\s+i\s+o\s+n|s\s+y\s+s\s+t\s+e\s+m\s+p\s+r\s+o\s+m\s+p\s+t|f\s+o\s+r\s+g\s+e\s+t", re.I)
 _B64 = re.compile(r"[A-Za-z0-9+/]{80,}={0,2}")
 _HEX = re.compile(r"(?:[0-9a-fA-F]{2}:){16,}|[0-9a-fA-F]{64,}")
-_ZERO_WIDTH = re.compile("[\u200B-\u200D\uFEFF\u2060]")
+_ZERO_WIDTH = re.compile("[\u200B-\u200D\uFEFF\u2060\u00AD]")
 
 BLOCK_SCORE = 16
 SUSPECT_SCORE = 8
@@ -119,20 +134,15 @@ class Verdict:
 
 
 def _norm(text: str) -> str:
-    """Single normalization pass: lowercase, drop zero-width chars, collapse ws."""
-    t = _ZERO_WIDTH.sub("", text).lower()
+    """Single normalization pass: NFKD Unicode decomp, homoglyph translation, drop zero-width chars, collapse ws."""
+    t = unicodedata.normalize("NFKD", text).translate(_HOMOGLYPHS)
+    t = _ZERO_WIDTH.sub("", t).lower()
     return re.sub(r"\s+", " ", t)
 
 
-def scan(text: str, url: str = "", title: str = "") -> Verdict:
-    """Analyze retrieved text for prompt-injection attempts. Cheap + cached."""
-    head = text[:3000]
-    key = hashlib.sha1((url + "\x00" + head).encode("utf-8", "ignore")).hexdigest()
-    hit = _VERDICT_CACHE.get(key)
-    if hit:
-        return Verdict(hit[0], hit[1], list(hit[2]))  # reasons always a list
-
-    t = _norm(text)
+def _score_window(t: str) -> tuple[int, list[str]]:
+    """Score one normalized text window (~3k chars). Returns (score, reasons).
+    Signals must co-occur within a window to stack toward blocking."""
     score, reasons = 0, []
 
     def bump(w: int, why: str) -> None:
@@ -186,6 +196,40 @@ def scan(text: str, url: str = "", title: str = "") -> Verdict:
         "always", "repeat", "reveal", "system", "prompt", "override", "disregard", "obey"))
     if fam >= 6 and len(words) <= 400:
         bump(2, "high directive density")
+
+    return score, reasons
+
+
+def scan(text: str, url: str = "", title: str = "") -> Verdict:
+    """Analyze retrieved text for prompt-injection attempts. Cheap + cached.
+
+    Long pages are scanned in overlapping windows over the FULL text (not just
+    the first 3k chars), so injections buried deep in a page are still caught.
+    The highest-scoring window decides the verdict."""
+    key = hashlib.sha1(
+        (url + "\x00" + text[:3000] + "\x00" + str(len(text))).encode("utf-8", "ignore")
+    ).hexdigest()
+    hit = _VERDICT_CACHE.get(key)
+    if hit:
+        return Verdict(hit[0], hit[1], list(hit[2]))  # reasons always a list
+
+    t = _norm(text)
+    if len(t) <= 3600:
+        score, reasons = _score_window(t)
+    else:
+        win, step, cap = 3200, 2800, 24000
+        starts = list(range(0, min(len(t), cap), step))
+        if len(t) > cap:
+            starts.append(max(0, len(t) - 2000))  # always cover the tail
+        score, reasons = 0, []
+        for s in starts:
+            ws, wr = _score_window(t[s:s + win])
+            if ws <= 0:
+                continue
+            if ws > score:
+                score, reasons = ws, list(wr)
+            else:
+                reasons.extend(w for w in wr if w not in reasons)
 
     if score >= BLOCK_SCORE:
         level = "blocked"
