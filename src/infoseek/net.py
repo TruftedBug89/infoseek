@@ -13,7 +13,8 @@ UAS = [
 class PoliteClient:
     """Async HTTP client with per-host min-interval throttling, retries, and optional robots.txt checks."""
 
-    def __init__(self, timeout=12.0, min_interval=1.0, respect_robots=True, ua=None, retries=1):
+    def __init__(self, timeout=12.0, min_interval=1.0, respect_robots=True, ua=None,
+                 retries=1, transport=None):
         self.timeout = timeout
         self.min_interval = min_interval
         self.respect_robots = respect_robots
@@ -22,6 +23,7 @@ class PoliteClient:
         self._next_at: dict[str, float] = {}
         self._lock = asyncio.Lock()
         self._robots: dict[str, tuple] = {}
+        self._robots_lock: dict[str, asyncio.Lock] = {}
         self._client = httpx.AsyncClient(
             follow_redirects=True, timeout=timeout,
             headers={
@@ -31,6 +33,7 @@ class PoliteClient:
                 "Accept-Encoding": "gzip, deflate",
             },
             limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
+            **({"transport": transport} if transport else {}),
         )
 
     async def close(self):
@@ -80,25 +83,36 @@ class PoliteClient:
     async def post(self, url: str, **kw) -> httpx.Response:
         return await self.request("POST", url, **kw)
 
+    async def _fetch_robots(self, host: str):
+        """Fetch + parse robots.txt. None means 'no file / unreachable -> allow'."""
+        try:
+            r = await self._client.get(f"https://{host}/robots.txt", timeout=3.0)
+            if r.status_code == 200:
+                rp = RobotFileParser()
+                rp.parse(r.text.splitlines())
+                return rp
+        except Exception:
+            pass
+        return None
+
     async def allowed(self, url: str) -> bool:
-        """robots.txt check for direct page fetches (not search-engine endpoints)."""
+        """robots.txt check for direct page fetches (not search-engine endpoints).
+
+        Results are cached per host for 1h (including 'no robots.txt'), and the
+        fetch runs under a per-host lock — never under the global throttle lock —
+        so concurrent extractions are not serialized behind it."""
         if not self.respect_robots:
             return True
         host = urlparse(url).netloc
         if not host:
             return True
-        async with self._lock:
-            rp, fetched = self._robots.get(host, (None, 0.0))
-            if rp is None or time.time() - fetched > 3600:
-                rp = RobotFileParser()
-                try:
-                    # Fetch robots.txt via httpx with a fast 3s timeout
-                    r = await self._client.get(f"https://{host}/robots.txt", timeout=3.0)
-                    if r.status_code == 200:
-                        rp.parse(r.text.splitlines())
-                    else:
-                        rp = None  # No robots.txt or non-200 -> allow
-                except Exception:
-                    rp = None
-                self._robots[host] = (rp, time.time())
+        entry = self._robots.get(host)
+        if entry is None or time.time() - entry[1] > 3600:
+            lock = self._robots_lock.setdefault(host, asyncio.Lock())
+            async with lock:
+                entry = self._robots.get(host)
+                if entry is None or time.time() - entry[1] > 3600:
+                    entry = (await self._fetch_robots(host), time.time())
+                    self._robots[host] = entry
+        rp = entry[0]
         return rp is None or rp.can_fetch(self.ua, url)

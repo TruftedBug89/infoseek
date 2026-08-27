@@ -28,7 +28,11 @@ async def main():
         v = infoseek.scan(sample)
         print(f"  {v.level:8s} score={v.score:2d} {sample[:50]}")
 
-    print("\n== 5. status ==")
+    print("\n== 5. run() — the zero-decision entry point ==")
+    print((await infoseek.run("https://pythonhosted.org/setuptools/"))[:200],
+          "   <- dead page, served from the Wayback Machine")
+
+    print("\n== 6. status ==")
     print((await infoseek.status())[:300])
 
 

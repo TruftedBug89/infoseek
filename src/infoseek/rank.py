@@ -14,8 +14,8 @@ PRIORITY = {
     "ddg": 10, "pypi": 10, "npm": 10, "crates": 10, "mdn": 10,
     "so": 9, "hn": 8, "gh": 8, "wiki": 8, "arxiv": 8, "openalex": 8,
     "pubmed": 8, "crossref": 7, "wikidata": 7, "reddit": 7,
-    "lobsters": 7, "news": 6, "code": 6, "yt": 6,
-    "serper": 10, "brave": 10, "searxng": 10, "marginalia": 5
+    "lobsters": 7, "wayback": 7, "commoncrawl": 6, "news": 6, "code": 6, "yt": 6,
+    "serper": 10, "brave": 10, "searxng": 10, "swarm": 9, "marginalia": 5
 }
 
 
@@ -28,7 +28,7 @@ class Result:
     rank: int = 0          # position within its engine
     date: str = ""
     extra: str = ""        # extra signal (stars, score, tags...) shown inline
-    score: float = 0.0     # merged relevance score (filled by merge_scored)
+    score: float = 0.0     # merged relevance score (filled by merge)
 
 
 def normalize_url(u: str) -> str:
@@ -103,7 +103,7 @@ def _recency_bonus(r: Result) -> float:
     return 0.0
 
 
-def merge_scored(groups: list[list[Result]], n: int, order: list[str]) -> list[Result]:
+def merge(groups: list[list[Result]], n: int, order: list[str]) -> list[Result]:
     """Score-driven merge: priority + rank + recency, with per-source diversity cap."""
     by_src: dict[str, list[Result]] = {}
     for g in groups:
@@ -128,10 +128,6 @@ def merge_scored(groups: list[list[Result]], n: int, order: list[str]) -> list[R
         merged.append(r)
         counts[r.source] = counts.get(r.source, 0) + 1
     return dedupe(merged)[:n]
-
-
-def merge(groups: list[list[Result]], n: int, order: list[str]) -> list[Result]:
-    return merge_scored(groups, n, order)
 
 
 def to_dicts(results: list[Result]) -> list[dict]:

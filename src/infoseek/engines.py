@@ -1,6 +1,6 @@
 """Search engines. Every engine is keyless by default; brave/serper/searxng activate
 only when the matching env vars are present (checked at call time, never logged)."""
-import os, re
+import json, os, re
 from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs, unquote, quote
 from bs4 import BeautifulSoup
@@ -10,7 +10,7 @@ from .rank import Result, clean
 ENGINE_NAMES = [
     "ddg", "marginalia", "hn", "lobsters", "so", "news", "wiki", "arxiv",
     "openalex", "pubmed", "crossref", "wikidata", "gh", "code", "reddit",
-    "pypi", "npm", "crates", "mdn", "yt",
+    "pypi", "npm", "crates", "mdn", "yt", "wayback", "commoncrawl", "swarm",
     "gh_issues", "prs", "gh_releases", "changelog", "error", "compat",
     "brave", "serper", "searxng"
 ]
@@ -75,6 +75,8 @@ async def _ddg_fetch(c, q, n):
 
 async def marginalia(c, q, n):
     r = await c.get("https://old-search.marginalia.nu/search", params={"query": q})
+    if r.status_code in (429, 503):  # the public instance is often overloaded
+        return [], "marginalia: rate-limited (search engine busy, try again in a minute)"
     if r.status_code != 200:
         return [], f"marginalia http {r.status_code}"
     if "barraged by queries" in r.text or "<title>Error</title>" in r.text:
@@ -103,7 +105,7 @@ async def hn(c, q, n):
         cm = h.get("num_comments") or 0
         d = (h.get("created_at") or "")[:10]
         out.append(Result(title=h.get("title") or "", url=url, source="hn", rank=i,
-                          extra=f"▲{pts} · {cm}💬 · {h.get('author','')}", date=d,
+                          extra=f"{pts} points, {cm} comments, by {h.get('author','')}", date=d,
                           snippet=clean(BeautifulSoup(h.get("story_text") or "", "lxml").get_text(" ", strip=True) or f"Discuss on Hacker News ({cm} comments)", 140)))
     return out, (None if out else "hn: no hits")
 
@@ -119,7 +121,7 @@ async def lobsters(c, q, n):
             continue
         out.append(Result(title=title, url=it.get("url") or f"https://lobste.rs{it.get('short_id_url','')}",
                           source="lobsters", rank=i, date=(it.get("created_at") or "")[:10],
-                          extra=f"{it.get('comment_count',0)}💬 · {it.get('tags',[])[:2]}",
+                          extra=f"{it.get('comment_count',0)} comments, tags: {','.join((it.get('tags') or [])[:2])}",
                           snippet=clean(it.get("description") or "", 140)))
         if len(out) >= n:
             break
@@ -133,9 +135,9 @@ async def so(c, q, n, site="stackoverflow"):
     out = []
     for i, it in enumerate(r.json().get("items", [])[:n]):
         tags = ",".join((it.get("tags") or [])[:3])
-        ans = "✓" if it.get("is_answered") else ""
+        ans = "answered" if it.get("is_answered") else "unanswered"
         out.append(Result(title=it.get("title", ""), url=it.get("link", ""), source="so", rank=i,
-                          extra=f"{ans} {it.get('score',0)} · {it.get('answer_count',0)} answers · [{tags}]",
+                          extra=f"{ans}, score {it.get('score',0)}, {it.get('answer_count',0)} answers, tags: {tags}",
                           date=datetime.fromtimestamp(it.get("creation_date", 0), tz=timezone.utc).strftime("%Y-%m-%d")))
     return out, (None if out else "so: no items")
 
@@ -218,7 +220,7 @@ async def gh(c, q, n):
         desc = it.get("description") or ""
         lang = it.get("language") or ""
         out.append(Result(title=it.get("full_name", ""), url=it.get("html_url", ""), source="gh", rank=i,
-                          extra=f"★{it.get('stargazers_count',0)} · {lang} · updated {it.get('updated_at','')[:10]}",
+                          extra=f"stars {it.get('stargazers_count',0)}, {lang}, updated {it.get('updated_at','')[:10]}",
                           snippet=clean(desc, 150)))
     return out, (None if out else "gh: no items")
 
@@ -242,7 +244,9 @@ async def code(c, q, n):
     return out, (None if out else "grep.app: no hits")
 
 async def reddit(c, q, n):
-    """old.reddit HTML search (server-rendered, keyless). Falls back to pullpush.io API."""
+    """old.reddit HTML search (server-rendered, keyless). Falls back to pullpush.io,
+    then to DuckDuckGo site-restricted search (reddit walls most direct endpoints
+    from datacenter IPs; DDG site: search stays reliable)."""
     try:
         r = await c.get("https://old.reddit.com/search", params={"q": q, "sort": "relevance"})
         if r.status_code == 200:
@@ -269,13 +273,24 @@ async def reddit(c, q, n):
                          params={"q": q, "size": n}, retries=0)
         if pp.status_code == 200:
             rows = (pp.json().get("data") or [])[:n]
-            return [Result(title=x.get("title", ""),
-                           url=f"https://www.reddit.com{x.get('permalink','')}",
-                           source="reddit", rank=i,
-                           extra=f"r/{x.get('subreddit','')} · ▲{x.get('score',0)} · {x.get('num_comments',0)}💬 · {x.get('author','')}",
-                           snippet=clean((x.get('selftext') or '').strip(), 150))
-                    for i, x in enumerate(rows) if x.get("title")], None if rows else "pullpush: no data"
-        return [], f"reddit http {r.status_code}"
+            out = [Result(title=x.get("title", ""),
+                          url=f"https://www.reddit.com{x.get('permalink','')}",
+                          source="reddit", rank=i,
+                          extra=f"r/{x.get('subreddit','')}, score {x.get('score',0)}, {x.get('num_comments',0)} comments, by {x.get('author','')}",
+                          snippet=clean((x.get('selftext') or '').strip(), 150))
+                   for i, x in enumerate(rows) if x.get("title")]
+            if out:
+                return out, None
+    except Exception:
+        pass
+    # last resort: DuckDuckGo site-restricted search, re-tagged as reddit
+    try:
+        out, err = await ddg(c, f"site:reddit.com {q}", n)
+        if out:
+            for x in out:
+                x.source = "reddit"
+            return out, None
+        return [], err or "reddit: no path returned results (origin walled, pullpush empty)"
     except Exception as e:
         return [], f"reddit: {type(e).__name__}: {str(e)[:80]}"
 
@@ -347,7 +362,7 @@ async def openalex(c, q, n):
             snippet = " ".join(w for _, w in pos[:60])
         out.append(Result(title=title, url=f"https://doi.org/{doi.replace('https://doi.org/','')}" if doi else url,
                           source="openalex", rank=i,
-                          extra=f"citations:{it.get('cited_by_count',0)} · {venue}",
+                          extra=f"citations {it.get('cited_by_count',0)}, {venue}",
                           date=str(it.get("publication_year") or ""),
                           snippet=clean(snippet, 150)))
     return out, (None if out else "openalex: no hits")
@@ -424,7 +439,7 @@ async def crossref(c, q, n):
             auth = au[0].get("family", "") + (" et al." if len(au) > 1 else "")
         out.append(Result(title=title, url=f"https://doi.org/{doi}" if doi else (it.get("URL") or ""),
                           source="crossref", rank=i,
-                          extra=f"citations:{it.get('is-referenced-by-count',0)} · {venue} · {auth}",
+                          extra=f"citations {it.get('is-referenced-by-count',0)}, {venue}, {auth}",
                           date=year, snippet=""))
     return out, (None if out else "crossref: no items")
 
@@ -441,7 +456,7 @@ async def pypi(c: PoliteClient, q: str, n: int):
             url=info.get("project_url") or f"https://pypi.org/project/{pkg}/",
             snippet=clean(info.get("summary") or "", 160),
             source="pypi", rank=0,
-            extra=f"License: {info.get('license') or 'N/A'} · Author: {info.get('author') or 'N/A'}",
+            extra=f"license: {info.get('license') or 'N/A'}, author: {info.get('author') or 'N/A'}",
             date=info.get("release_url", "")
         ))
     # 2. General PyPI HTML search for related packages
@@ -499,7 +514,7 @@ async def npm(c: PoliteClient, q: str, n: int):
 async def crates(c: PoliteClient, q: str, n: int):
     """Rust crates.io package search via official API. Keyless."""
     r = await c.get("https://crates.io/api/v1/crates", params={"q": q, "per_page": n},
-                    headers={"User-Agent": "infoseek/0.6.0 (https://github.com/TruftedBug89/infoseek)"})
+                    headers={"User-Agent": "infoseek/0.8.0 (https://github.com/TruftedBug89/infoseek)"})
     if r.status_code != 200:
         return [], f"crates http {r.status_code}"
     out = []
@@ -513,7 +528,7 @@ async def crates(c: PoliteClient, q: str, n: int):
             url=f"https://crates.io/crates/{name}",
             snippet=clean(desc, 150),
             source="crates", rank=i,
-            extra=f"Downloads: {dl:,} · License: {it.get('license', 'N/A')}",
+            extra=f"downloads: {dl:,}, license: {it.get('license', 'N/A')}",
             date=(it.get("updated_at") or "")[:10]
         ))
     return out, (None if out else "crates: no crates found")
@@ -577,7 +592,7 @@ async def _gh_issue_fetch(c, owner_repo: str, num: int):
     body = clean(re.sub(r"\s+", " ", it.get("body") or ""), 150)
     return [Result(title=it.get("title", ""), url=it.get("html_url", ""),
                    source="gh_issues", rank=0,
-                   extra=f"{kind} #{num} · {it.get('state','')} · {it.get('comments',0)}💬",
+                   extra=f"{kind} #{num}, {it.get('state','')}, {it.get('comments',0)} comments",
                    date=(it.get("created_at") or "")[:10], snippet=body)], None
 
 
@@ -591,7 +606,7 @@ async def _gh_repo_result(c, owner_repo: str):
     it = r.json()
     return [Result(title=it.get("full_name", ""), url=it.get("html_url", ""),
                    source="gh", rank=0,
-                   extra=f"★{it.get('stargazers_count',0)} · {it.get('language') or ''} · "
+                   extra=f"stars {it.get('stargazers_count',0)}, {it.get('language') or 'n/a'}, "
                          f"updated {it.get('updated_at','')[:10]}",
                    snippet=clean(it.get("description") or "", 150))], None
 
@@ -625,7 +640,7 @@ async def gh_issues(c, q, n, extra_qualifier: str = ""):
         body = clean(re.sub(r"\s+", " ", it.get("body") or ""), 150)
         out.append(Result(title=it.get("title", ""), url=it.get("html_url", ""),
                           source="gh_issues", rank=i,
-                          extra=f"{kind} · {repo} · {it.get('state','')} · {it.get('comments',0)}💬",
+                          extra=f"{kind}, {repo}, {it.get('state','')}, {it.get('comments',0)} comments",
                           date=(it.get("created_at") or "")[:10], snippet=body))
     return out, (None if out else "gh issues: no items")
 
@@ -664,7 +679,7 @@ async def gh_releases(c, q, n):
         body = clean(re.sub(r"\s+", " ", it.get("body") or ""), 150)
         out.append(Result(title=f"{owner_repo} {tag}" + (f" — {name}" if name and name != tag else ""),
                           url=it.get("html_url", ""), source="gh_releases", rank=len(out),
-                          extra="release" + (" · prerelease" if it.get("prerelease") else ""),
+                          extra="release" + (", prerelease" if it.get("prerelease") else ""),
                           date=(it.get("published_at") or "")[:10], snippet=body))
         if len(out) >= n:
             break
@@ -692,7 +707,7 @@ async def changelog(c, q, n):
                 j = r.json()
                 out.append(Result(title=f"{owner_repo} — {path}", url=j.get("html_url", ""),
                                   source="changelog", rank=0,
-                                  extra=f"changelog file · {j.get('size', 0)} bytes",
+                                  extra=f"changelog file, {j.get('size', 0)} bytes",
                                   snippet=f"Changelog file for {owner_repo} (extract to read)"))
                 break
             if r.status_code in (403, 429):
@@ -745,7 +760,7 @@ async def error(c, q, n):
                 r.snippet = focused
     merged.sort(key=lambda r: -r.score)
     for i, r in enumerate(merged):
-        r.rank = i  # carry the solution-first order through merge_scored
+        r.rank = i  # carry the solution-first order through merge()
     errs = " · ".join(e for e in (err_i, err_s, err_w) if e)
     return merged[:n], (errs or None)
 
@@ -789,11 +804,115 @@ async def compat(c, q, n):
     return merged[:n], (errs or None)
 
 
+# ------------------------------------------------------- archive & crawl corps
+# Public-good infrastructure: the Wayback Machine (Internet Archive) and the
+# Common Crawl index. Both are keyless, stable, and never block polite clients.
+
+async def wayback(c, q, n):
+    """Wayback Machine CDX: archived snapshots for a URL, path, or domain
+    (wildcards ok: 'example.com/blog/*'). Returns archive.org links — pass
+    them to extract(), or extract() the original URL (it falls back to the
+    archive automatically when the live page is unreachable)."""
+    q = (q or "").strip()
+    if not q:
+        return [], "wayback: empty query"
+    target = re.sub(r"^https?://", "", q)
+    r = await c.get("https://web.archive.org/cdx/search/cdx",
+                    params={"url": target, "output": "json", "limit": max(n * 3, 10),
+                            "collapse": "urlkey", "filter": "statuscode:200"},
+                    timeout=20)
+    if r.status_code != 200:
+        return [], f"wayback http {r.status_code}"
+    try:
+        rows = r.json()
+    except Exception:
+        return [], "wayback: bad response"
+    if len(rows) < 2:
+        return [], "wayback: no snapshots"
+    head, body = rows[0], rows[1:]
+    out = []
+    for i, row in enumerate(body[:n]):
+        d = dict(zip(head, row))
+        ts = d.get("timestamp", "")
+        orig = d.get("original", "")
+        date = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}" if len(ts) >= 8 else ""
+        out.append(Result(title=orig, url=f"https://web.archive.org/web/{ts}/{orig}",
+                          source="wayback", rank=i, date=date,
+                          extra=f"archived {ts}, status {d.get('statuscode', '')}"))
+    return out, (None if out else "wayback: no snapshots")
+
+
+_cc_index: dict = {"id": None, "ts": 0.0}
+
+
+async def _cc_index_id(c) -> str | None:
+    """Newest Common Crawl index id (cached 24 h)."""
+    import time as _t
+    if _cc_index["id"] and _t.time() - _cc_index["ts"] < 86400:
+        return _cc_index["id"]
+    try:
+        r = await c.get("https://index.commoncrawl.org/collinfo.json", timeout=15)
+        if r.status_code == 200:
+            _cc_index.update(id=r.json()[0]["id"], ts=_t.time())
+            return _cc_index["id"]
+    except Exception:
+        pass
+    return None
+
+
+async def commoncrawl(c, q, n):
+    """Common Crawl index: URLs the latest crawl saw, with snapshot timestamps.
+    Discovery without touching the origin site — pair with extract() (which
+    falls back to the Wayback Machine if the live page blocks scrapers).
+    Wildcards ok: 'example.com/blog/*'."""
+    q = (q or "").strip()
+    if not q:
+        return [], "commoncrawl: empty query"
+    idx = await _cc_index_id(c)
+    if not idx:
+        return [], "commoncrawl: index unavailable"
+    target = re.sub(r"^https?://", "", q)
+    r = await c.get(f"https://index.commoncrawl.org/{idx}-index",
+                    params={"url": target, "output": "json", "limit": n}, timeout=20)
+    if r.status_code != 200:
+        return [], f"commoncrawl http {r.status_code}"
+    out = []
+    for i, line in enumerate(r.text.strip().splitlines()[:n]):
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        ts = d.get("timestamp", "")
+        date = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}" if len(ts) >= 8 else ""
+        out.append(Result(title=d.get("url", ""), url=d.get("url", ""),
+                          source="commoncrawl", rank=i, date=date,
+                          extra=f"crawl {idx}, status {d.get('status', '')}, archived {ts}"))
+    return out, (None if out else "commoncrawl: no records")
+
+
+async def swarm(c, q, n):
+    """SearXNG instance swarm: fan out over community-hosted SearXNG instances
+    (github.com/searxng/searxng) in parallel and merge the first usable
+    results. Keyless; bot-walled instances are skipped and health-demoted.
+    Set SEARXNG_URL to your own instance for a private, guaranteed swarm."""
+    base = os.environ.get("SEARXNG_URL")
+    if base:  # own instance first: most reliable + private
+        res, _err = await searxng(c, q, n)
+        if res:
+            for r in res:
+                r.source = "swarm"
+            return res, None
+    from .swarm import swarm_search
+    out = await swarm_search(c, q, n)
+    return out, (None if out else "swarm: no reachable instance returned results")
+
+
 REGISTRY = {
     "ddg": ddg, "marginalia": marginalia, "hn": hn, "lobsters": lobsters, "so": so,
     "news": news, "wiki": wiki, "arxiv": arxiv, "openalex": openalex,
     "pubmed": pubmed, "crossref": crossref, "wikidata": wikidata, "gh": gh, "code": code,
     "reddit": reddit, "pypi": pypi, "npm": npm, "crates": crates, "mdn": mdn, "yt": yt,
+    "wayback": wayback, "commoncrawl": commoncrawl, "swarm": swarm,
     "gh_issues": gh_issues, "prs": prs, "gh_releases": gh_releases, "changelog": changelog,
     "error": error, "compat": compat,
     "brave": brave, "serper": serper, "searxng": searxng,
@@ -804,6 +923,7 @@ SITE_MAP = {
     "news.ycombinator.com": "hn", "stackoverflow.com": "so", "stackexchange.com": "so",
     "github.com": "gh", "arxiv.org": "arxiv", "en.wikipedia.org": "wiki", "wikipedia.org": "wiki",
     "old-search.marginalia.nu": "marginalia", "grep.app": "code",
+    "web.archive.org": "wayback", "archive.org": "wayback",
     "pypi.org": "pypi", "npmjs.com": "npm", "registry.npmjs.org": "npm",
     "crates.io": "crates", "developer.mozilla.org": "mdn",
     "youtube.com": "yt", "youtu.be": "yt"
@@ -811,6 +931,7 @@ SITE_MAP = {
 
 _ALIAS = {
     "doi": "crossref", "s2": "openalex", "pm": "pubmed", "wd": "wikidata",
+    "wb": "wayback", "archive": "wayback", "cc": "commoncrawl",
     "docs": "mdn", "cargo": "crates", "rust": "crates", "node": "npm",
     "python": "pypi", "pip": "pypi", "youtube": "yt",
     "issues": "gh_issues", "issue": "gh_issues", "ghissues": "gh_issues",
@@ -823,7 +944,7 @@ _ALIAS = {
 KEYLESS = {
     "ddg", "marginalia", "hn", "lobsters", "so", "news", "wiki", "arxiv",
     "openalex", "pubmed", "crossref", "wikidata", "gh", "code", "reddit",
-    "pypi", "npm", "crates", "mdn", "yt",
+    "pypi", "npm", "crates", "mdn", "yt", "wayback", "commoncrawl", "swarm",
     "gh_issues", "prs", "gh_releases", "changelog", "error", "compat"
 }
 
@@ -837,11 +958,21 @@ def available() -> list[str]:
     return out
 
 
+#: Maximum-coverage mix: general web + SearXNG swarm + forums + news.
+WIDE_MIX = ["ddg", "swarm", "hn", "so", "news"]
+
+
 def resolve_engines(query: str, explicit: str | None) -> tuple[list[str], str]:
-    """Return (engine list, cleaned query). Supports prefixes and site: filters."""
-    if explicit and explicit != "auto":
-        return [e.strip() for e in explicit.split(",") if e.strip() in REGISTRY], query
+    """Return (engine list, cleaned query). Supports prefixes, site: filters,
+    and the special mixes 'auto' (default) and 'wide' (maximum coverage).
+    A routing prefix is stripped whenever engines are chosen explicitly, so
+    'code:o/r t' escalated to the wide mix searches for 'o/r t', not the prefix."""
     m = re.match(r"^([a-z0-9_]+):\s*(.*)$", query, re.S)
+    prefixed_q = m.group(2).strip() if m and (m.group(1) in REGISTRY or m.group(1) in _ALIAS) else None
+    if explicit == "wide":
+        return list(WIDE_MIX), (prefixed_q or query)
+    if explicit and explicit != "auto":
+        return [e.strip() for e in explicit.split(",") if e.strip() in REGISTRY], (prefixed_q or query)
     if m and m.group(1) in REGISTRY:
         return [m.group(1)], m.group(2).strip()
     if m and m.group(1) in _ALIAS:

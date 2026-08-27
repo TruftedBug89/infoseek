@@ -1,9 +1,11 @@
 """Content extraction: domain-aware fast paths + trafilatura + heuristic fallback."""
-import asyncio, re
+import asyncio, os, re
 from urllib.parse import urlparse, unquote, quote
 import httpx, trafilatura
 from bs4 import BeautifulSoup
 from .net import PoliteClient
+from .research import (auto_focus, VERSION_RE, COMPAT_WORDS, ERROR_WORDS,
+                       SOLUTION_WORDS)
 
 def _sanitize_html(html: str) -> str:
     """Strip hidden CSS/DOM elements (honeypots & hidden injection vectors)."""
@@ -192,12 +194,12 @@ async def _reddit(client: PoliteClient, url: str, max_chars: int) -> str:
         r = await client.get("https://api.pullpush.io/reddit/search/submission/",
                              params={"ids": m.group(1)}, retries=0)
         if r.status_code != 200:
-            return "[reddit: live API blocked; use the search snippets]"
+            return ""  # let the access ladder try the Wayback Machine
     except Exception:
-        return "[reddit: live API unavailable; use the search snippets]"
+        return ""
     data = (r.json().get("data") or [])
     if not data:
-        return "[reddit: not found via API]"
+        return ""
     x = data[0]
     return _trim(f"{x.get('title','')} — r/{x.get('subreddit','')}\n\n{x.get('selftext') or '(link post)'}", max_chars)
 
@@ -247,6 +249,149 @@ def _pdf_text(r, max_chars: int) -> str:
     return _trim(txt, max_chars)
 
 
+_BOT_WALL = re.compile(
+    r"just a moment|verifying your browser|making sure you.?re not a bot|"
+    r"attention required|cf-browser-verification|are you a robot|"
+    r"please enable (?:cookies|javascript) to continue|captcha", re.I)
+
+
+def _looks_bot_blocked(html: str) -> bool:
+    """Cheap anti-bot challenge detector (Cloudflare & friends)."""
+    return bool(_BOT_WALL.search(html[:4000])) and len(html) < 60000
+
+
+def _html_to_text(html: str, url: str, max_chars: int) -> str:
+    """Shared HTML -> clean text pipeline (trafilatura -> heuristic -> meta)."""
+    html = _sanitize_html(html)
+    txt = trafilatura.extract(html, url=url, include_comments=False, include_tables=True,
+                              include_formatting=False, include_links=False, include_images=False,
+                              favor_precision=True)
+    if not txt or len(txt) < 120:
+        txt = trafilatura.extract(html, url=url, include_comments=False, include_tables=True,
+                                  include_formatting=False, include_links=False, include_images=False)
+    if not txt:
+        txt = _heuristic(html)
+    if not txt:
+        txt = _meta_desc(html)
+    return _trim(txt or "", max_chars)
+
+
+async def _live_extract(client: PoliteClient, url: str, path: str, max_chars: int) -> str:
+    """Fetch from the origin site and extract. Returns '' on any failure
+    (network, non-200, bot wall, unparseable) so the caller can climb the
+    access ladder (Wayback -> Jina)."""
+    ext = os.path.splitext(path.lower())[1]
+    try:
+        r = await client.get(url)
+    except httpx.HTTPError:
+        return ""
+    if r.status_code != 200:
+        return ""
+    if ext in _RAW_EXTENSIONS:
+        return _trim(r.text, max_chars)
+    if _looks_bot_blocked(r.text):
+        return ""
+    ctype = r.headers.get("content-type", "").lower()
+    if "pdf" in ctype or url.lower().split("?")[0].endswith(".pdf"):
+        return _pdf_text(r, max_chars)
+    if "text/plain" in ctype or "text/markdown" in ctype or "application/json" in ctype or "application/javascript" in ctype:
+        return _trim(r.text, max_chars)
+    if "html" not in ctype and "text" not in ctype:
+        return ""
+    return _html_to_text(r.text, url, max_chars)
+
+
+async def _wayback_snapshot(client: PoliteClient, url: str) -> str:
+    """Nearest archived snapshot URL (Wayback availability API). '' if none."""
+    try:
+        r = await client.get("https://archive.org/wayback/available",
+                             params={"url": url}, timeout=10)
+        if r.status_code == 200:
+            snap = ((r.json().get("archived_snapshots") or {}).get("closest") or {})
+            if snap.get("available"):
+                return snap.get("url") or ""
+    except Exception:
+        pass
+    return ""
+
+
+async def _wayback_cdx_snapshots(client: PoliteClient, url: str, limit: int = 2) -> list:
+    """Most recent archived snapshot URLs via CDX (fallback candidate list)."""
+    try:
+        target = re.sub(r"^https?://", "", url)
+        r = await client.get("https://web.archive.org/cdx/search/cdx",
+                             params={"url": target, "output": "json", "limit": limit + 2,
+                                     "fastLatest": "true", "filter": "statuscode:200"},
+                             timeout=15)
+        if r.status_code != 200:
+            return []
+        rows = r.json()
+        if len(rows) < 2:
+            return []
+        head, body = rows[0], rows[1:]
+        idx = {k: i for i, k in enumerate(head)}
+        out = []
+        for row in body:
+            ts = row[idx.get("timestamp", 1)]
+            orig = row[idx.get("original", 2)]
+            out.append(f"https://web.archive.org/web/{ts}/{orig}")
+        return out[:limit]
+    except Exception:
+        return []
+
+
+async def _fetch_snapshot(client: PoliteClient, snap: str, url: str, max_chars: int) -> str:
+    """Fetch one snapshot URL as the raw original ('id_' flag, no toolbar)."""
+    if "id_" not in snap:
+        snap = re.sub(r"(/web/[^/]+)", r"\1id_", snap, count=1)
+    try:
+        r = await client.get(snap, timeout=25)
+    except httpx.HTTPError:
+        return ""
+    if r.status_code != 200:
+        return ""
+    ctype = r.headers.get("content-type", "").lower()
+    if "html" not in ctype and "text" not in ctype:
+        return ""
+    if "text/plain" in ctype or "text/markdown" in ctype:
+        return _trim(r.text, max_chars)
+    return _html_to_text(r.text, url, max_chars)
+
+
+async def _wayback_extract(client: PoliteClient, url: str, max_chars: int) -> str:
+    """Extract a page from the Wayback Machine. Works for pages that block
+    scrapers or no longer exist: the fetch never touches the origin site.
+    Tries the closest snapshot first, then the most recent ones via CDX."""
+    snap = await _wayback_snapshot(client, url)
+    if snap:
+        txt = await _fetch_snapshot(client, snap, url, max_chars)
+        if txt:
+            return txt
+    for snap in await _wayback_cdx_snapshots(client, url, limit=2):
+        txt = await _fetch_snapshot(client, snap, url, max_chars)
+        if txt:
+            return txt
+    return ""
+
+
+async def _jina_extract(client: PoliteClient, url: str, max_chars: int) -> str:
+    """Jina Reader (github.com/jina-ai/reader): renders JS-heavy pages.
+    Only used when JINA_API_KEY is set — the keyless tier is Cloudflare-gated
+    from most server IPs, and a key keeps the fetch private to your account."""
+    key = os.environ.get("JINA_API_KEY")
+    if not key:
+        return ""
+    try:
+        r = await client.get("https://r.jina.ai/" + url, timeout=30,
+                             headers={"Authorization": f"Bearer {key}",
+                                      "Accept": "text/plain"})
+    except httpx.HTTPError:
+        return ""
+    if r.status_code != 200:
+        return ""
+    return _trim(r.text, max_chars)
+
+
 _RAW_EXTENSIONS = {
     ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml",
     ".md", ".txt", ".rs", ".go", ".sh", ".bash", ".zsh", ".toml", ".ini", ".cfg",
@@ -255,8 +400,27 @@ _RAW_EXTENSIONS = {
 }
 
 
+async def _access_ladder(client: PoliteClient, url: str, path: str, max_chars: int) -> str:
+    """Generic-page access ladder: origin first (robots-respected), then public
+    archives. Archive fetches never touch the origin site, so they are used
+    even when robots.txt disallows direct fetches or the site bot-blocks
+    scrapers — that is how hard-to-reach pages still become readable."""
+    if await client.allowed(url):
+        txt = await _live_extract(client, url, path, max_chars)
+        if txt:
+            return txt
+    txt = await _wayback_extract(client, url, max_chars)
+    if not txt:
+        txt = await _jina_extract(client, url, max_chars)
+    return txt
+
+
 async def extract_url(client: PoliteClient, url: str, max_chars: int = 2000) -> str:
-    """Fetch and extract clean text from one URL (respects robots.txt unless disabled)."""
+    """Fetch and extract clean text from one URL.
+
+    Domain fast paths (GitHub/Wikipedia/HN/Reddit/PyPI/crates/raw files) use
+    official APIs first; anything that comes back empty climbs the access
+    ladder (live fetch -> Wayback Machine -> Jina Reader if JINA_API_KEY set)."""
     parsed = urlparse(url)
     host = parsed.netloc.lower()
     path = parsed.path
@@ -268,8 +432,8 @@ async def extract_url(client: PoliteClient, url: str, max_chars: int = 2000) -> 
             if r.status_code == 200:
                 return _trim(r.text, max_chars)
         except httpx.HTTPError:
-            return ""
-        return ""
+            pass
+        return await _access_ladder(client, url, path, max_chars)
 
     # Official-API and GitHub fast paths
     if "github.com" in host:
@@ -303,55 +467,24 @@ async def extract_url(client: PoliteClient, url: str, max_chars: int = 2000) -> 
             txt = await _github_changelog_file(client, seg[0], seg[1], max_chars)
             if txt:
                 return txt
-        return await _github_readme(client, url, max_chars)
+        txt = await _github_readme(client, url, max_chars)
+        return txt or await _access_ladder(client, url, path, max_chars)
     if "wikipedia.org" in host:
-        return await _wikipedia(client, url, max_chars)
+        txt = await _wikipedia(client, url, max_chars)
+        return txt or await _access_ladder(client, url, path, max_chars)
     if "news.ycombinator.com" in host:
-        return await _hn_item(client, url, max_chars)
+        txt = await _hn_item(client, url, max_chars)
+        return txt or await _access_ladder(client, url, path, max_chars)
     if "reddit.com" in host:
-        return await _reddit(client, url, max_chars)
+        txt = await _reddit(client, url, max_chars)
+        return txt or await _access_ladder(client, url, path, max_chars)
     if "pypi.org" in host and "/project/" in url:
-        return await _pypi_pkg(client, url, max_chars)
+        txt = await _pypi_pkg(client, url, max_chars)
+        return txt or await _access_ladder(client, url, path, max_chars)
     if "crates.io" in host and "/crates/" in url:
-        return await _crates_pkg(client, url, max_chars)
-    if not await client.allowed(url):
-        return f"[skipped: robots.txt of {host} disallows this fetch]"
-
-    # Check for direct file extensions
-    ext = os.path.splitext(path.lower())[1]
-    if ext in _RAW_EXTENSIONS:
-        try:
-            r = await client.get(url)
-            if r.status_code == 200:
-                return _trim(r.text, max_chars)
-        except httpx.HTTPError:
-            return ""
-
-    try:
-        r = await client.get(url)
-    except httpx.HTTPError:
-        return ""
-    if r.status_code != 200:
-        return ""
-    ctype = r.headers.get("content-type", "").lower()
-    if "pdf" in ctype or url.lower().split("?")[0].endswith(".pdf"):
-        return _pdf_text(r, max_chars)
-    if "text/plain" in ctype or "text/markdown" in ctype or "application/json" in ctype or "application/javascript" in ctype:
-        return _trim(r.text, max_chars)
-    if "html" not in ctype and "text" not in ctype:
-        return ""
-    html = _sanitize_html(r.text)
-    txt = trafilatura.extract(html, url=url, include_comments=False, include_tables=True,
-                              include_formatting=False, include_links=False, include_images=False,
-                              favor_precision=True)
-    if not txt or len(txt) < 120:
-        txt = trafilatura.extract(html, url=url, include_comments=False, include_tables=True,
-                                  include_formatting=False, include_links=False, include_images=False)
-    if not txt:
-        txt = _heuristic(html)
-    if not txt:
-        txt = _meta_desc(html)
-    return _trim(txt, max_chars)
+        txt = await _crates_pkg(client, url, max_chars)
+        return txt or await _access_ladder(client, url, path, max_chars)
+    return await _access_ladder(client, url, path, max_chars)
 
 async def extract_many(client: PoliteClient, urls: list[str], max_chars: int = 1200,
                        concurrency: int = 3, query: str | None = None) -> list[dict]:
@@ -396,10 +529,7 @@ def relevant_sentences(text: str, query: str, max_chars: int = 1200,
     if not terms:
         return _trim(text, max_chars)
     if focus is None:
-        from .research import auto_focus
         focus = auto_focus(query)
-    if focus in ("version", "error"):
-        from .research import VERSION_RE, COMPAT_WORDS, ERROR_WORDS, SOLUTION_WORDS
 
     # Preserve fenced code blocks as atomic chunks, split prose on paragraphs or sentence boundaries
     raw_chunks = []

@@ -14,7 +14,6 @@ Design notes
 """
 from __future__ import annotations
 
-import asyncio
 import re
 from dataclasses import dataclass, field
 
@@ -263,62 +262,22 @@ async def search_error(message: str, n: int = 6, fresh: bool = False) -> list[di
     """Search an error message + solutions: GitHub issues, Stack Overflow, and
     the general web in parallel, merged and re-ranked so results mentioning
     fixes/workarounds/patches float to the top. The message is normalized
-    first (paths/UUIDs/hex noise dropped, identifiers kept)."""
+    first (paths/UUIDs/hex noise dropped, identifiers kept).
+
+    Thin wrapper over the `error:` engine (single implementation)."""
     from . import search as _search
-    from .rank import Result as _R, merge as _merge, to_dicts
-    core = normalize_error_message(message)
-    if not core:
-        return []
-    l1, l2, l3 = await asyncio.gather(
-        _search(f"issues: {core}", n=max(n, 4), fresh=fresh),
-        _search(f"so: {core}", n=max(n, 4), fresh=fresh),
-        _search(f"{core} fix OR solution", n=max(n, 4), fresh=fresh),
-    )
-    groups = [[_R(**d) for d in lst] for lst in (l1, l2, l3)]
-    order = ["gh_issues", "so", "ddg", "hn", "reddit", "news"]
-    merged = _merge(groups, n, order)
-    for r in merged:
-        if SOLUTION_WORDS.search(f"{r.title} {r.snippet}".lower()):
-            r.score += 2.0
-        if r.snippet:
-            focused = focus_snippet(r.snippet, core, 160, "error")
-            if focused:
-                r.snippet = focused
-    merged.sort(key=lambda r: -r.score)
-    return to_dicts(merged[:n])
+    return await _search(f"error: {message}", n=n, fresh=fresh)
 
 
 async def search_compat(query: str, n: int = 6, fresh: bool = False) -> list[dict]:
     """Version/compatibility lookup — 'which tool version supports X'.
-    Fans out over GitHub issues, web variants ('which version supports',
-    'added in release'), then re-ranks for version-bearing snippets and
-    re-centers each snippet on its version/compatibility line."""
+    Fans out over GitHub issues/releases and web variants, then re-ranks for
+    version-bearing snippets and re-centers each snippet on its
+    version/compatibility line.
+
+    Thin wrapper over the `compat:` engine (single implementation)."""
     from . import search as _search
-    from .rank import Result as _R, merge as _merge, to_dicts
-    q = (query or "").strip()
-    if not q:
-        return []
-    variants = [
-        f"issues: {q} support OR version",
-        f"{q} which version supports",
-        f"{q} added in release changelog",
-    ]
-    lists = await asyncio.gather(*[_search(v, n=max(n, 4), fresh=fresh) for v in variants])
-    groups = [[_R(**d) for d in lst] for lst in lists]
-    order = ["gh_issues", "gh_releases", "changelog", "ddg", "hn", "so", "reddit", "news"]
-    merged = _merge(groups, n, order)
-    for r in merged:
-        blob = f"{r.title} {r.snippet}"
-        if VERSION_RE.search(blob):
-            r.score += 1.5
-        if COMPAT_WORDS.search(blob):
-            r.score += 1.0
-        if r.snippet:
-            focused = focus_snippet(r.snippet, q, 160, "version")
-            if focused:
-                r.snippet = focused
-    merged.sort(key=lambda r: -r.score)
-    return to_dicts(merged[:n])
+    return await _search(f"compat: {query}", n=n, fresh=fresh)
 
 
 async def changelog(project: str, n: int = 6, fresh: bool = False) -> list[dict]:

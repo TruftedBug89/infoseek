@@ -7,7 +7,7 @@ import pytest
 mcp = pytest.importorskip("infoseek.mcp", reason="mcp package not installed")
 
 EXPECTED_TOOLS = {
-    "search", "ask", "extract", "scan", "suggest", "status", "selfcheck", "run",
+    "search", "ask", "extract", "scan", "suggest", "status", "selfcheck", "run", "help",
 }
 
 

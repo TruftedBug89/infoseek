@@ -1,6 +1,6 @@
 [project]
 name = "infoseek"
-version = "0.6.0"
+version = "0.8.0"
 description = "Keyless multi-engine web research: search, ask, extract, suggest"
 requires-python = ">=3.10"
 dependencies = ["httpx", "beautifulsoup4", "lxml", "trafilatura"]

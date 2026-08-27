@@ -32,12 +32,15 @@ def cmd_search(a: argparse.Namespace) -> None:
     async def go():
         results = await infoseek.search(a.query, n=a.n, engines=a.engines, fresh=a.fresh,
                                         freshness=a.freshness)
+        if not results and a.engines == "auto":
+            results = await infoseek.search(a.query, n=a.n, engines="wide", fresh=True,
+                                            freshness=a.freshness)
         if a.json:
             _FIELDS = ("title", "url", "snippet", "source", "rank", "date", "extra", "score")
             print(json.dumps([{k: r.get(k) for k in _FIELDS} for r in results], indent=2))
             return
         for i, r in enumerate(results, 1):
-            meta = " \u00b7 ".join(x for x in [r.get("source"), r.get("extra"), r.get("date")] if x)
+            meta = " | ".join(x for x in [r.get("source"), r.get("extra"), r.get("date")] if x)
             print(f"{i}. {r.get('title')}")
             if meta:
                 print(f"   [{meta}]")
@@ -45,7 +48,7 @@ def cmd_search(a: argparse.Namespace) -> None:
             if r.get("snippet"):
                 print(f"   {r.get('snippet')}")
         if not results:
-            print("(no results)", file=sys.stderr)
+            print(infoseek.no_results_hint(a.query, a.engines, a.freshness), file=sys.stderr)
 
     _run(go())
 
@@ -115,6 +118,11 @@ def cmd_selfcheck(a: argparse.Namespace) -> None:
     _run(go())
 
 
+def cmd_help(a: argparse.Namespace) -> None:
+    import infoseek
+    print(infoseek.help())
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="infoseek", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="command")
@@ -155,9 +163,12 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("status", help="engine availability and last errors")
     st.set_defaults(func=cmd_status)
 
-    chk = sub.add_parser("selfcheck", help="run the 27-check test battery (live engines)")
+    chk = sub.add_parser("selfcheck", help="run the full test battery (unit checks + live engines)")
     chk.add_argument("--quiet", action="store_true")
     chk.set_defaults(func=cmd_selfcheck)
+
+    h = sub.add_parser("help", help="usage cheat sheet for agents")
+    h.set_defaults(func=cmd_help)
 
     # compatibility: top-level --query behaves like `search`
     p.add_argument("--query", help="search query (compat shorthand)")

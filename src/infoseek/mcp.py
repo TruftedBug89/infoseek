@@ -46,8 +46,10 @@ def _json(obj) -> str:
 async def search(query: str = "", q: str = "", n: int = 6, engines: str = "auto", fresh: bool = False,
                  freshness: str | None = None) -> str:
     """Multi-engine web search. Returns JSON: [{title, url, snippet, source, rank, score}].
-    query: search text; engine prefixes (hn:, reddit:, so:, news:, wiki:, arxiv:, gh:, code:, ...) focus the source.
-    n: max results. engines: 'auto' or comma-separated engine list. fresh: bypass the 30-min cache.
+    query: search text; engine prefixes (hn:, reddit:, so:, news:, wiki:, arxiv:, gh:, code:,
+    wayback:, commoncrawl:, swarm:, error:, compat:, ...) focus the source.
+    n: max results. engines: 'auto', 'wide' (maximum coverage incl. SearXNG swarm),
+    or a comma-separated engine list. fresh: bypass the 30-min cache.
     freshness: recency limit ('day'|'week'|'month'|'year'|'7d'); blocked snippets are dropped,
     suspect ones flagged in extra."""
     target_q = (query or q or "").strip()
@@ -56,8 +58,13 @@ async def search(query: str = "", q: str = "", n: int = 6, engines: str = "auto"
     try:
         results = await infoseek.search(target_q, n=n, engines=engines, fresh=fresh,
                                         freshness=freshness)
+        if not results and engines == "auto":
+            results = await infoseek.search(target_q, n=n, engines="wide", fresh=True,
+                                            freshness=freshness)
     except Exception as e:
         return _json({"error": f"{type(e).__name__}: {e}"})
+    if not results:
+        return _json({"results": [], "hint": infoseek.no_results_hint(target_q, engines, freshness)})
     return _json(results)
 
 
@@ -137,6 +144,13 @@ async def status() -> str:
 
 
 @mcp.tool()
+async def help() -> str:
+    """Usage cheat sheet for infoseek: what each tool does, query prefixes,
+    and the one-call run() router. Call this first if unsure which tool to use."""
+    return infoseek.help()
+
+
+@mcp.tool()
 async def selfcheck(verbose: bool = False) -> str:
     """Run the full test battery (unit checks + live probes of all engines + extract
     and ask smoke runs). Network required; takes ~30s. verbose: full report or one line."""
@@ -145,19 +159,17 @@ async def selfcheck(verbose: bool = False) -> str:
 
 @mcp.tool()
 async def run(query: str = "", q: str = "", n: int = 6, budget: int = 0) -> str:
-    """Convenience entry: plain query -> formatted search results; prefix with 'ask:'
-    (e.g. 'ask: why is redis faster than postgres') -> LLM-ready context bundle."""
+    """The one-call tool — routes by query shape automatically: bare URL -> page
+    extraction (archive fallback); 'ask: ...' -> LLM-ready context bundle;
+    error-message text -> fixes-first research; version questions -> compat
+    research; anything else -> formatted search. Use this when unsure."""
     target_q = (query or q or "").strip()
     if not target_q:
         return "(no query provided)"
-    if target_q.lower().startswith("ask:"):
-        return await infoseek.ask(target_q[4:].strip(), n=max(3, n), budget=budget or 2500)
-    res = await infoseek.search(target_q, n=n)
-    lines = []
-    for r in res:
-        meta = " \u00b7 ".join(x for x in (r.get("source"), r.get("extra"), r.get("date")) if x)
-        lines.append(f"{r.get('title')}\n   [{meta}]\n   {r.get('url')}\n   {r.get('snippet', '')}")
-    return "\n\n".join(lines) if lines else "(no results)"
+    try:
+        return await infoseek.run(target_q, n=n, budget=budget)
+    except Exception as e:
+        return f"[[run error: {type(e).__name__}: {e}]]"
 
 
 def main() -> None:
