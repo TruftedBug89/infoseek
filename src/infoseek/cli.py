@@ -52,40 +52,67 @@ def cmd_search(a: argparse.Namespace) -> None:
 
 def cmd_ask(a: argparse.Namespace) -> None:
     import infoseek
-    out = asyncio.run(infoseek.ask(a.query, n=a.n, extract_top=a.extract_top,
-                                   budget=a.budget, fresh=a.fresh,
-                                   freshness=a.freshness, format="json" if a.json else "text"))
-    print(out if isinstance(out, str) else json.dumps(out, indent=2))
+
+    async def go():
+        out = await infoseek.ask(a.query, n=a.n, extract_top=a.extract_top,
+                                 budget=a.budget, fresh=a.fresh,
+                                 freshness=a.freshness, format="json" if a.json else "text")
+        print(out if isinstance(out, str) else json.dumps(out, indent=2))
+
+    _run(go())
 
 
 def cmd_extract(a: argparse.Namespace) -> None:
     import infoseek
-    print(asyncio.run(infoseek.extract(a.url, max_chars=a.max_chars, fresh=a.fresh,
-                                       guard=not a.no_guard)))
+
+    async def go():
+        print(await infoseek.extract(a.url, max_chars=a.max_chars, fresh=a.fresh,
+                                     guard=not a.no_guard))
+
+    _run(go())
 
 
 def cmd_scan(a: argparse.Namespace) -> None:
     import infoseek
-    text = a.text if a.text is not None else asyncio.run(infoseek.extract(a.url, max_chars=4000, guard=False))
-    v = infoseek.scan(text, url=a.url or "")
-    out = {"level": v.level, "score": v.score, "reasons": list(v.reasons)}
-    print(json.dumps(out, indent=2))
-    sys.exit(0 if v.level != "blocked" else 2)
+    if a.text is None and not a.url:
+        print("Error: provide either --text <string> or --url <url>", file=sys.stderr)
+        sys.exit(1)
+
+    async def go():
+        text = a.text if a.text is not None else await infoseek.extract(a.url, max_chars=4000, guard=False)
+        v = infoseek.scan(text, url=a.url or "")
+        out = {"level": v.level, "score": v.score, "reasons": list(v.reasons)}
+        print(json.dumps(out, indent=2))
+        sys.exit(0 if v.level != "blocked" else 2)
+
+    _run(go())
 
 
 def cmd_suggest(a: argparse.Namespace) -> None:
     import infoseek
-    print(asyncio.run(infoseek.suggest(a.query)))
+
+    async def go():
+        print(await infoseek.suggest(a.query))
+
+    _run(go())
 
 
 def cmd_status(a: argparse.Namespace) -> None:
     import infoseek
-    print(asyncio.run(infoseek.status()))
+
+    async def go():
+        print(await infoseek.status())
+
+    _run(go())
 
 
 def cmd_selfcheck(a: argparse.Namespace) -> None:
     import infoseek
-    print(asyncio.run(infoseek.selfcheck(verbose=not a.quiet)))
+
+    async def go():
+        print(await infoseek.selfcheck(verbose=not a.quiet))
+
+    _run(go())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -134,9 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # compatibility: top-level --query behaves like `search`
     p.add_argument("--query", help="search query (compat shorthand)")
-    p.add_argument("--n", type=int, default=6)
+    p.add_argument("-n", "--n", type=int, default=6)
     p.add_argument("--engines", default="auto", help="comma-separated engine list or auto")
     p.add_argument("--fresh", action="store_true")
+    p.add_argument("--freshness", help="recency limit: day|week|month|year|7d")
     p.add_argument("--json", action="store_true", help="search output as JSON")
     return p
 

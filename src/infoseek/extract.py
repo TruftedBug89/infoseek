@@ -247,13 +247,45 @@ def _pdf_text(r, max_chars: int) -> str:
     return _trim(txt, max_chars)
 
 
+_RAW_EXTENSIONS = {
+    ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml",
+    ".md", ".txt", ".rs", ".go", ".sh", ".bash", ".zsh", ".toml", ".ini", ".cfg",
+    ".sql", ".c", ".cpp", ".h", ".hpp", ".cs", ".java", ".kt", ".rb", ".php", ".xml",
+    ".csv", ".tsv", ".rst", ".proto"
+}
+
+
 async def extract_url(client: PoliteClient, url: str, max_chars: int = 2000) -> str:
     """Fetch and extract clean text from one URL (respects robots.txt unless disabled)."""
-    host = urlparse(url).netloc.lower()
-    # Official-API fast paths: robots.txt governs web pages, not these APIs.
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    path = parsed.path
+
+    # Fast path: raw code / raw GitHub / Gists / pastebins
+    if "raw.githubusercontent.com" in host or "gist.githubusercontent.com" in host or "pastebin.com/raw" in url:
+        try:
+            r = await client.get(url)
+            if r.status_code == 200:
+                return _trim(r.text, max_chars)
+        except httpx.HTTPError:
+            return ""
+        return ""
+
+    # Official-API and GitHub fast paths
     if "github.com" in host:
-        p = urlparse(url).path.strip("/")
+        p = path.strip("/")
         seg = p.split("/")
+        # owner/repo/blob/branch/filepath -> fetch raw file directly
+        if len(seg) >= 4 and seg[2] == "blob":
+            owner, repo = seg[0], seg[1]
+            branch_and_file = "/".join(seg[3:])
+            raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch_and_file}"
+            try:
+                r = await client.get(raw_url)
+                if r.status_code == 200:
+                    return _trim(r.text, max_chars)
+            except Exception:
+                pass
         # owner/repo/issues/123 or owner/repo/pull/123 -> issue + comments
         if len(seg) >= 4 and seg[2] in ("issues", "pull") and seg[3].isdigit():
             txt = await _github_issue(client, seg[0], seg[1], seg[3], max_chars)
@@ -284,15 +316,28 @@ async def extract_url(client: PoliteClient, url: str, max_chars: int = 2000) -> 
         return await _crates_pkg(client, url, max_chars)
     if not await client.allowed(url):
         return f"[skipped: robots.txt of {host} disallows this fetch]"
+
+    # Check for direct file extensions
+    ext = os.path.splitext(path.lower())[1]
+    if ext in _RAW_EXTENSIONS:
+        try:
+            r = await client.get(url)
+            if r.status_code == 200:
+                return _trim(r.text, max_chars)
+        except httpx.HTTPError:
+            return ""
+
     try:
         r = await client.get(url)
     except httpx.HTTPError:
         return ""
     if r.status_code != 200:
         return ""
-    ctype = r.headers.get("content-type", "")
+    ctype = r.headers.get("content-type", "").lower()
     if "pdf" in ctype or url.lower().split("?")[0].endswith(".pdf"):
         return _pdf_text(r, max_chars)
+    if "text/plain" in ctype or "text/markdown" in ctype or "application/json" in ctype or "application/javascript" in ctype:
+        return _trim(r.text, max_chars)
     if "html" not in ctype and "text" not in ctype:
         return ""
     html = _sanitize_html(r.text)
@@ -338,29 +383,56 @@ _STOP = set("""a an and are as at be been but by for from has have in is it its 
 
 def relevant_sentences(text: str, query: str, max_chars: int = 1200,
                        focus: str | None = None) -> str:
-    """Keep only the sentences that matter for the query: term overlap, phrase hits,
-    lead-position bonus, then order them as they appear. Token-lean by construction.
+    """Keep the blocks and sentences that matter for the query: term overlap, phrase hits,
+    lead-position bonus, and code blocks, ordered as they appear. Token-lean by construction.
 
     focus='version' additionally boosts sentences with version numbers and
     compatibility phrasing; focus='error' boosts fix/solution/error lines
     (auto-detected from the query when focus is None)."""
+    text = (text or "").strip()
+    if not text:
+        return ""
     terms = [t for t in re.split(r"\W+", query.lower()) if t not in _STOP and len(t) > 2]
-    text = re.sub(r"\s+", " ", text or "").strip()
-    if not terms or not text:
+    if not terms:
         return _trim(text, max_chars)
     if focus is None:
         from .research import auto_focus
         focus = auto_focus(query)
     if focus in ("version", "error"):
         from .research import VERSION_RE, COMPAT_WORDS, ERROR_WORDS, SOLUTION_WORDS
-    sents = re.split(r"(?<=[.!?])\s+", text)
+
+    # Preserve fenced code blocks as atomic chunks, split prose on paragraphs or sentence boundaries
+    raw_chunks = []
+    code_pattern = re.compile(r"```[\s\S]*?```")
+    last_idx = 0
+    for match in code_pattern.finditer(text):
+        pre = text[last_idx:match.start()].strip()
+        if pre:
+            for p in re.split(r"(?<=[.!?])\s+|\n{2,}", pre):
+                p_clean = p.strip()
+                if p_clean:
+                    raw_chunks.append(p_clean)
+        raw_chunks.append(match.group(0).strip())
+        last_idx = match.end()
+    rest = text[last_idx:].strip()
+    if rest:
+        for p in re.split(r"(?<=[.!?])\s+|\n{2,}", rest):
+            p_clean = p.strip()
+            if p_clean:
+                raw_chunks.append(p_clean)
+
+    if not raw_chunks:
+        return _trim(text, max_chars)
+
     scored = []
-    for i, s in enumerate(sents):
+    for i, s in enumerate(raw_chunks):
         low = s.lower()
         hits = sum(low.count(t) for t in terms)
-        if hits == 0:
+        if hits == 0 and not s.startswith("```"):
             continue
-        score = hits * 2 + (2.0 if len(terms) == 1 else 0) + (1.5 if i < 3 else 0)
+        score = hits * 2.0 + (2.0 if len(terms) == 1 else 0) + (1.5 if i < 3 else 0)
+        if s.startswith("```"):
+            score += 2.0
         if focus == "version":
             if VERSION_RE.search(s):
                 score += 3.0
@@ -375,5 +447,17 @@ def relevant_sentences(text: str, query: str, max_chars: int = 1200,
     if not scored:
         return _trim(text, max_chars)
     scored.sort(key=lambda x: -x[0])
-    picked = sorted(scored[:4], key=lambda x: x[1])
-    return _trim(" ".join(s for _, _, s in picked), max_chars)
+
+    # Fill character budget
+    picked = []
+    curr_len = 0
+    for score, idx, chunk in scored:
+        if curr_len + len(chunk) + 2 <= max_chars * 1.15 or not picked:
+            picked.append((idx, chunk))
+            curr_len += len(chunk) + 2
+        if curr_len >= max_chars:
+            break
+
+    picked.sort(key=lambda x: x[0])
+    separator = "\n\n" if any("\n" in s for _, s in picked) else " "
+    return _trim(separator.join(s for _, s in picked), max_chars)

@@ -21,7 +21,7 @@ def _db() -> sqlite3.Connection:
 
 
 def _key(*parts) -> str:
-    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()
+    return hashlib.sha1("\x00".join(str(p) for p in parts).encode("utf-8")).hexdigest()
 
 
 def _decode_val(raw: bytes | str) -> str:

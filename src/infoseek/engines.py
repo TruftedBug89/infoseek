@@ -499,7 +499,7 @@ async def npm(c: PoliteClient, q: str, n: int):
 async def crates(c: PoliteClient, q: str, n: int):
     """Rust crates.io package search via official API. Keyless."""
     r = await c.get("https://crates.io/api/v1/crates", params={"q": q, "per_page": n},
-                    headers={"User-Agent": "infoseek/0.3.0 (https://github.com/TruftedBug89/infoseek)"})
+                    headers={"User-Agent": "infoseek/0.6.0 (https://github.com/TruftedBug89/infoseek)"})
     if r.status_code != 200:
         return [], f"crates http {r.status_code}"
     out = []
@@ -892,7 +892,17 @@ async def run_engines(client: PoliteClient, query: str, n: int, engines_list: li
                 pass
         return name, res[:n], err
 
-    tasks = [_a.ensure_future(one(nm)) for nm in engines_list]
+    engine_timeout = float(os.environ.get("INFOSEEK_ENGINE_TIMEOUT", "3.5"))
+
+    async def one_timed(nm: str):
+        try:
+            return await _a.wait_for(one(nm), timeout=engine_timeout)
+        except _a.TimeoutError:
+            return nm, [], f"{nm}: timeout (> {engine_timeout}s)"
+        except Exception as exc:
+            return nm, [], f"{type(exc).__name__}: {str(exc)[:90]}"
+
+    tasks = [_a.ensure_future(one_timed(nm)) for nm in engines_list]
     for fut in _a.as_completed(tasks):
         try:
             name, res, err = await fut

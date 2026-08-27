@@ -42,4 +42,17 @@ def test_extract_invalid_url_offline():
 
 def test_run_ask_routing_offline_invalid_query():
     out = asyncio.run(mcp.run("ask: "))
-    assert "ask error" in out or "QUERY:" in out
+    assert "ask error" in out or "QUERY:" in out or "no query" in out
+
+
+def test_mcp_fuzzy_parameter_aliases():
+    out_url = asyncio.run(mcp.extract(Url="https://example.com/invalid"))
+    assert isinstance(out_url, str)
+
+    out_uri = asyncio.run(mcp.extract(uri="https://example.com/invalid"))
+    assert isinstance(out_uri, str)
+
+    out_scan = asyncio.run(mcp.scan(text="test text", Url="https://example.com"))
+    data = json.loads(out_scan)
+    assert data["level"] == "ok"
+

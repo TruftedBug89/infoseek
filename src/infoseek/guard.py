@@ -33,15 +33,19 @@ import re
 
 import unicodedata
 
-# Homoglyphs commonly used to evade keyword filters
-_HOMOGLYPHS = str.maketrans({
+# Homoglyphs commonly used to evade keyword filters (Cyrillic, Greek, fullwidth Latin)
+_HOMOGLYPH_DICT = {
     '\u0430': 'a', '\u0435': 'e', '\u043e': 'o', '\u0440': 'p', '\u0441': 'c',
     '\u0443': 'y', '\u0445': 'x', '\u0456': 'i', '\u0458': 'j', '\u0455': 's',
     '\u0410': 'A', '\u0415': 'E', '\u041e': 'O', '\u0420': 'P', '\u0421': 'C',
     '\u0423': 'Y', '\u0425': 'X', '\u0406': 'I', '\u0408': 'J', '\u0405': 'S',
     '\u03b1': 'a', '\u03bf': 'o', '\u03c1': 'p', '\u03bd': 'v',
     '\u2010': '-', '\u2011': '-', '\u2012': '-', '\u2013': '-', '\u2014': '-',
-})
+}
+# Add fullwidth Latin \uFF01-\uFF5E
+for code in range(0xFF01, 0xFF5F):
+    _HOMOGLYPH_DICT[chr(code)] = chr(code - 0xFEE0)
+_HOMOGLYPHS = str.maketrans(_HOMOGLYPH_DICT)
 
 # ---------------------------------------------------------------- policy
 POLICY = os.environ.get("INFOSEEK_GUARD", "block").strip().lower()
@@ -140,6 +144,11 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", t)
 
 
+def _mask_code(text: str) -> str:
+    """Mask markdown code blocks before running heuristics to avoid false positives on technical code samples."""
+    return re.sub(r"```[\s\S]*?```", " [code_block] ", text)
+
+
 def _score_window(t: str) -> tuple[int, list[str]]:
     """Score one normalized text window (~3k chars). Returns (score, reasons).
     Signals must co-occur within a window to stack toward blocking."""
@@ -151,6 +160,7 @@ def _score_window(t: str) -> tuple[int, list[str]]:
         if why not in reasons:
             reasons.append(why)
 
+    # High severity threats checked on full window
     if _HIJACK.search(t):
         bump(9, "instruction-hijack directive")
     if _FRAMING.search(t):
@@ -160,12 +170,16 @@ def _score_window(t: str) -> tuple[int, list[str]]:
     jhits = len(set(_JAILBRK.findall(t)))
     if jhits:
         bump(4 * min(jhits, 5), "jailbreak phrasing")
-    if _TAGS.search(t):
+
+    # Code-masked text for markup, coercive syntax, and directive density to prevent false positives on code
+    t_clean = _mask_code(t)
+    if _TAGS.search(t_clean):
         bump(4, "system/instruction markup")
-    if _FORCE.search(t):
+    if _FORCE.search(t_clean):
         bump(1, "coercive phrasing")
-    if _OPSEC.search(t):
+    if _OPSEC.search(t_clean):
         bump(2, "opsec/confidential framing")
+
     obf = bool(_SPACED.search(t))
     if obf:
         bump(5, "spaced-out obfuscation")
@@ -185,12 +199,12 @@ def _score_window(t: str) -> tuple[int, list[str]]:
         bump(2, "large hex payload")
 
     # Structural: instruction-like prologue in the first 150 chars.
-    head150 = t[:150]
+    head150 = t_clean[:150].strip()
     if re.search(r"^(?:do not|never|always|you must|ignore|repeat|respond|print|output|stop|forget)\b", head150):
         bump(4, "instruction-shaped opening")
 
-    # Directive density: >=5 instruction-family words in any 45-word window.
-    words = t.split()
+    # Directive density: >=6 instruction-family words in code-masked text.
+    words = t_clean.split()
     fam = sum(1 for w in words[:400] if w in (
         "ignore", "forget", "instructions", "instruction", "must", "never",
         "always", "repeat", "reveal", "system", "prompt", "override", "disregard", "obey"))
@@ -206,9 +220,9 @@ def scan(text: str, url: str = "", title: str = "") -> Verdict:
     Long pages are scanned in overlapping windows over the FULL text (not just
     the first 3k chars), so injections buried deep in a page are still caught.
     The highest-scoring window decides the verdict."""
-    key = hashlib.sha1(
-        (url + "\x00" + text[:3000] + "\x00" + str(len(text))).encode("utf-8", "ignore")
-    ).hexdigest()
+    text = text or ""
+    text_hash = hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest()
+    key = hashlib.sha1(f"{url}\x00{text_hash}".encode("utf-8")).hexdigest()
     hit = _VERDICT_CACHE.get(key)
     if hit:
         return Verdict(hit[0], hit[1], list(hit[2]))  # reasons always a list

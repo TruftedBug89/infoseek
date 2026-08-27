@@ -30,7 +30,7 @@ class PoliteClient:
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Encoding": "gzip, deflate",
             },
-            limits=httpx.Limits(max_connections=16, max_keepalive_connections=8),
+            limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
         )
 
     async def close(self):
@@ -70,7 +70,8 @@ class PoliteClient:
                 return r
             except httpx.HTTPError as e:
                 last_err = e
-                await asyncio.sleep(1.5 * (attempt + 1))
+                if attempt < retries:
+                    await asyncio.sleep(1.0 * (attempt + 1))
         raise last_err or httpx.TransportError("request failed")
 
     async def get(self, url: str, **kw) -> httpx.Response:
@@ -84,13 +85,19 @@ class PoliteClient:
         if not self.respect_robots:
             return True
         host = urlparse(url).netloc
+        if not host:
+            return True
         async with self._lock:
             rp, fetched = self._robots.get(host, (None, 0.0))
             if rp is None or time.time() - fetched > 3600:
                 rp = RobotFileParser()
-                rp.set_url(f"https://{host}/robots.txt")
                 try:
-                    await asyncio.to_thread(rp.read)
+                    # Fetch robots.txt via httpx with a fast 3s timeout
+                    r = await self._client.get(f"https://{host}/robots.txt", timeout=3.0)
+                    if r.status_code == 200:
+                        rp.parse(r.text.splitlines())
+                    else:
+                        rp = None  # No robots.txt or non-200 -> allow
                 except Exception:
                     rp = None
                 self._robots[host] = (rp, time.time())

@@ -4,7 +4,7 @@ from infoseek import resolve_engines
 
 
 def test_version():
-    assert infoseek.__version__ == "0.5.0"
+    assert infoseek.__version__ == "0.6.0"
 
 
 def test_public_functions_exist():

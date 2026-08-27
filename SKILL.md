@@ -8,7 +8,7 @@ description: >-
   clean text from a URL ("search for", "look up", "research", "find sources", "news
   about", "what does X do", "ask the web"). No API keys needed; optional
   Brave/Serper/SearXNG keys make it stronger when present.
-version: 0.4.0
+version: 0.6.0
 author: TruftedBug89
 license: MIT
 platforms: [linux, macos, windows]

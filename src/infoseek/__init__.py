@@ -36,7 +36,7 @@ Query routing (prefixes / site: filters):
     releases: (GitHub release notes), changelog: (changelog pages)
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 import asyncio, os, re
 from urllib.parse import urlparse
@@ -60,11 +60,11 @@ _client: PoliteClient | None = None
 _last_errors: dict = {}
 
 
-def _get_client(min_interval: float) -> PoliteClient:
+def _get_client(min_interval: float = 1.0, respect_robots: bool = True) -> PoliteClient:
     global _client
     if _client is None:
         iv = float(os.environ.get("INFOSEEK_INTERVAL", str(min_interval)))
-        _client = PoliteClient(min_interval=iv)
+        _client = PoliteClient(min_interval=iv, respect_robots=respect_robots)
     return _client
 
 
@@ -130,7 +130,7 @@ def _screen_snippets(results: list) -> list:
 
 
 async def search(query: str, n: int = 6, engines: str = "auto", fresh: bool = False,
-                 min_interval: float = 1.2, freshness=None, expand: bool = False) -> list[dict]:
+                 min_interval: float = 1.0, freshness=None, expand: bool = False) -> list[dict]:
     """Run a multi-engine search. Returns deduped, merged result dicts
     (title, url, snippet, source, extra, date, rank).
 
@@ -185,32 +185,29 @@ async def ask(query: str, n: int = 5, extract_top: int = 2, budget: int = 2500,
     with per-source guard verdicts so agents can trace citations."""
     days = _freshness_days(freshness)
     engines_list, q = resolve_engines(query, "auto")
-    client = PoliteClient(min_interval=1.4, respect_robots=respect_robots)
-    try:
-        results, errors = await run_engines(client, q, n=max(n + 2, 6), engines_list=engines_list,
-                                            fresh=fresh, freshness_days=days)
-        results = _apply_freshness(_apply_site_filter(results, query), days)
-        merged = merge([results], n, engines_list + [e for e in KEYLESS if e not in engines_list])
-        targets = _pick_targets(merged, q, extract_top)
-        per_page = max(500, budget * 4 // max(extract_top, 1) - 250)
-        extr = await extract_many(client, [r.url for r in targets], max_chars=per_page,
-                                  concurrency=3, query=q)
-        _last_errors.update(errors)
-        bundle = fmt_bundle(q, merged, extr, budget_chars=budget * 4)
-        if format == "json":
-            guard_by_url = {x["url"]: x.get("guard") or {} for x in extr}
-            target_urls = {r.url for r in targets}
-            sources = [{"title": r.title, "url": r.url, "source": r.source,
-                        "date": r.date, "score": round(r.score, 2),
-                        "extracted": r.url in target_urls,
-                        "guard": (guard_by_url.get(r.url) or {}).get("level")
-                                 if r.url in target_urls else None}
-                       for r in merged]
-            return {"query": q, "context": bundle, "budget_tokens": budget,
-                    "sources": sources}
-        return bundle
-    finally:
-        await client.close()
+    client = _get_client(1.0, respect_robots=respect_robots)
+    results, errors = await run_engines(client, q, n=max(n + 2, 6), engines_list=engines_list,
+                                        fresh=fresh, freshness_days=days)
+    results = _apply_freshness(_apply_site_filter(results, query), days)
+    merged = merge([results], n, engines_list + [e for e in KEYLESS if e not in engines_list])
+    targets = _pick_targets(merged, q, extract_top)
+    per_page = max(500, budget * 4 // max(extract_top, 1) - 250)
+    extr = await extract_many(client, [r.url for r in targets], max_chars=per_page,
+                              concurrency=4, query=q)
+    _last_errors.update(errors)
+    bundle = fmt_bundle(q, merged, extr, budget_chars=budget * 4)
+    if format == "json":
+        guard_by_url = {x["url"]: x.get("guard") or {} for x in extr}
+        target_urls = {r.url for r in targets}
+        sources = [{"title": r.title, "url": r.url, "source": r.source,
+                    "date": r.date, "score": round(r.score, 2),
+                    "extracted": r.url in target_urls,
+                    "guard": (guard_by_url.get(r.url) or {}).get("level")
+                             if r.url in target_urls else None}
+                   for r in merged]
+        return {"query": q, "context": bundle, "budget_tokens": budget,
+                "sources": sources}
+    return bundle
 
 
 async def extract(url: str, max_chars: int = 2000, fresh: bool = False,
@@ -219,23 +216,20 @@ async def extract(url: str, max_chars: int = 2000, fresh: bool = False,
 
     With guard=True (default), prompt-injection attempts are denied: blocked content
     is replaced by a short denial note instead of the hostile text."""
-    client = PoliteClient(min_interval=1.5, respect_robots=respect_robots)
-    try:
-        from . import cache as _c
-        if not fresh:
-            hit = _c.get("ext", url, ttl=604800)
-            if hit:
-                return hit
-        txt = await extract_url(client, url, max_chars=max_chars)
-        if txt and guard:
-            v = scan(txt, url=url)
-            if v.level == "blocked" and guard_module_policy():
-                txt = f"[[denied: {v.short()}]]"
-        if txt and not fresh:
-            _c.set("ext", url, value=txt, ttl=604800)
-        return txt
-    finally:
-        await client.close()
+    client = _get_client(1.0, respect_robots=respect_robots)
+    from . import cache as _c
+    if not fresh:
+        hit = _c.get("ext", url, ttl=604800)
+        if hit:
+            return hit
+    txt = await extract_url(client, url, max_chars=max_chars)
+    if txt and guard:
+        v = scan(txt, url=url)
+        if v.level == "blocked" and guard_module_policy():
+            txt = f"[[denied: {v.short()}]]"
+    if txt and not fresh:
+        _c.set("ext", url, value=txt, ttl=604800)
+    return txt
 
 
 async def suggest(query: str) -> str:

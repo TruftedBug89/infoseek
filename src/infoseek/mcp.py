@@ -26,17 +26,6 @@ except ImportError as _e:  # pragma: no cover - exercised only when mcp missing
 
 import infoseek
 
-_NOTE = (
-    "infoseek is keyless web research. Engines: default mix = DuckDuckGo + Hacker "
-    "News + Stack Overflow + Reddit + news; prefix the query to focus a source: "
-    "hn: (Hacker News), reddit:, so: (Stack Overflow), news:, wiki:, arxiv:, "
-    "openalex:/s2: (scholarly), pubmed:/pm: (biomedical), doi:, gh: (GitHub), "
-    "code: (grep.app), lobsters:, marginalia:, ddg: (DuckDuckGo only), "
-    "site:<domain> auto-routes. No API keys needed; optional BRAVE_API_KEY / "
-    "SERPER_API_KEY / SEARXNG_URL env vars make search stronger. Retrieved web "
-    "content is screened by a built-in prompt-injection guard."
-)
-
 mcp = FastMCP(
     "infoseek",
     instructions=(
@@ -54,15 +43,18 @@ def _json(obj) -> str:
 
 
 @mcp.tool()
-async def search(query: str, n: int = 6, engines: str = "auto", fresh: bool = False,
+async def search(query: str = "", q: str = "", n: int = 6, engines: str = "auto", fresh: bool = False,
                  freshness: str | None = None) -> str:
     """Multi-engine web search. Returns JSON: [{title, url, snippet, source, rank, score}].
     query: search text; engine prefixes (hn:, reddit:, so:, news:, wiki:, arxiv:, gh:, code:, ...) focus the source.
     n: max results. engines: 'auto' or comma-separated engine list. fresh: bypass the 30-min cache.
     freshness: recency limit ('day'|'week'|'month'|'year'|'7d'); blocked snippets are dropped,
     suspect ones flagged in extra."""
+    target_q = (query or q or "").strip()
+    if not target_q:
+        return _json({"error": "Empty search query"})
     try:
-        results = await infoseek.search(query, n=n, engines=engines, fresh=fresh,
+        results = await infoseek.search(target_q, n=n, engines=engines, fresh=fresh,
                                         freshness=freshness)
     except Exception as e:
         return _json({"error": f"{type(e).__name__}: {e}"})
@@ -81,7 +73,7 @@ async def search_many(queries: list[str], n: int = 6, freshness: str | None = No
 
 
 @mcp.tool()
-async def ask(query: str, n: int = 5, extract_top: int = 2, budget: int = 2500,
+async def ask(query: str = "", q: str = "", n: int = 5, extract_top: int = 2, budget: int = 2500,
               freshness: str | None = None, format: str = "text") -> str:
     """Tavily-style context bundle: search + extract top pages, keep only the sentences
     relevant to the query, trim to a token budget. Feed the returned text to the model
@@ -90,8 +82,11 @@ async def ask(query: str, n: int = 5, extract_top: int = 2, budget: int = 2500,
     freshness: optional recency limit ('day'|'week'|'month'|'year'|'7d').
     format='json': returns {query, context, sources:[{url,title,guard,...}]} for
     citation tracing instead of plain text."""
+    target_q = (query or q or "").strip()
+    if not target_q:
+        return "[[ask error: Empty query]]"
     try:
-        out = await infoseek.ask(query, n=n, extract_top=extract_top, budget=budget,
+        out = await infoseek.ask(target_q, n=n, extract_top=extract_top, budget=budget,
                                  freshness=freshness, format=format)
         return out if isinstance(out, str) else _json(out)
     except Exception as e:
@@ -99,32 +94,39 @@ async def ask(query: str, n: int = 5, extract_top: int = 2, budget: int = 2500,
 
 
 @mcp.tool()
-async def extract(url: str, max_chars: int = 2000, fresh: bool = False) -> str:
+async def extract(url: str = "", uri: str = "", Url: str = "", max_chars: int = 2000, fresh: bool = False) -> str:
     """Fetch one URL and return clean, trimmed page text (robots.txt respected).
     Prompt-injection content is denied and replaced with a [[denied: ...]] note.
     url: full URL. max_chars: max characters returned. fresh: bypass the 7-day cache."""
+    target_url = (url or uri or Url or "").strip()
+    if not target_url:
+        return "[[extract error: Empty URL]]"
     try:
-        return await infoseek.extract(url, max_chars=max_chars, fresh=fresh)
+        return await infoseek.extract(target_url, max_chars=max_chars, fresh=fresh)
     except Exception as e:
         return f"[[extract error: {type(e).__name__}: {e}]]"
 
 
 @mcp.tool()
-async def scan(text: str, url: str = "") -> str:
+async def scan(text: str = "", url: str = "", uri: str = "", Url: str = "") -> str:
     """Run the prompt-injection guard on untrusted text (e.g. web content fetched
     outside infoseek). Returns JSON: {level, score, reasons} where level is
     'ok' | 'suspect' | 'blocked'. Do not feed 'blocked' content to the model."""
+    target_url = (url or uri or Url or "").strip()
     try:
-        v = infoseek.scan(text, url=url)
+        v = infoseek.scan(text, url=target_url)
         return _json({"level": v.level, "score": v.score, "reasons": list(v.reasons)})
     except Exception as e:
         return _json({"error": f"{type(e).__name__}: {e}"})
 
 
 @mcp.tool()
-async def suggest(query: str) -> str:
+async def suggest(query: str = "", q: str = "") -> str:
     """DuckDuckGo autocomplete suggestions for a query (keyless). Returns lines of suggestions."""
-    return await infoseek.suggest(query)
+    target_q = (query or q or "").strip()
+    if not target_q:
+        return "_no query provided_"
+    return await infoseek.suggest(target_q)
 
 
 @mcp.tool()
@@ -142,12 +144,15 @@ async def selfcheck(verbose: bool = False) -> str:
 
 
 @mcp.tool()
-async def run(query: str, n: int = 6, budget: int = 0) -> str:
+async def run(query: str = "", q: str = "", n: int = 6, budget: int = 0) -> str:
     """Convenience entry: plain query -> formatted search results; prefix with 'ask:'
     (e.g. 'ask: why is redis faster than postgres') -> LLM-ready context bundle."""
-    if query.strip().lower().startswith("ask:"):
-        return await infoseek.ask(query.strip()[4:].strip(), n=max(3, n), budget=budget or 2500)
-    res = await infoseek.search(query, n=n)
+    target_q = (query or q or "").strip()
+    if not target_q:
+        return "(no query provided)"
+    if target_q.lower().startswith("ask:"):
+        return await infoseek.ask(target_q[4:].strip(), n=max(3, n), budget=budget or 2500)
+    res = await infoseek.search(target_q, n=n)
     lines = []
     for r in res:
         meta = " \u00b7 ".join(x for x in (r.get("source"), r.get("extra"), r.get("date")) if x)
