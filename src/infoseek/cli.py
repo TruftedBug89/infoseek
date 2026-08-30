@@ -1,13 +1,19 @@
 """infoseek — command-line interface (stdlib argparse, no extra deps).
 
 Subcommands:
-    search   multi-engine web search (default)
-    ask      context bundle for LLM answering
-    extract  clean text from one URL (with prompt-injection guard)
-    scan     run the prompt-injection guard on a text/URL
-    suggest  DuckDuckGo autocomplete
-    status   engine availability + last errors
-    selfcheck  run the full test battery (unit + live engines)
+    find      search the web (simple, formatted for reading)
+    research  search + read the best pages -> context to answer from
+    deep      multi-angle research brief (slower, broader)
+    read      clean text from one URL
+    help      print the usage card
+
+    search    multi-engine web search (structured/default)
+    ask       context bundle for LLM answering
+    extract   clean text from one URL (with prompt-injection guard)
+    scan      run the prompt-injection guard on a text/URL
+    suggest   DuckDuckGo autocomplete
+    status    engine availability + last errors
+    selfcheck run the full test battery (unit + live engines)
 
 Compatibility: `infoseek --query "..."` is equivalent to `infoseek search "..."`.
 """
@@ -85,9 +91,62 @@ def cmd_selfcheck(a: argparse.Namespace) -> None:
     print(asyncio.run(infoseek.selfcheck(verbose=not a.quiet)))
 
 
+def cmd_find(a: argparse.Namespace) -> None:
+    import infoseek
+    print(infoseek.find(a.query, n=a.n, engines=a.engines, fresh=a.fresh))
+
+
+def cmd_research(a: argparse.Namespace) -> None:
+    import infoseek
+    print(infoseek.research(a.query, budget=a.budget, fresh=a.fresh))
+
+
+def cmd_deep(a: argparse.Namespace) -> None:
+    import infoseek
+    print(infoseek.deep(a.query, budget=a.budget, angles=a.angles, fresh=a.fresh))
+
+
+def cmd_read(a: argparse.Namespace) -> None:
+    import infoseek
+    print(infoseek.read(a.url, max_chars=a.max_chars, fresh=a.fresh))
+
+
+def cmd_help(a: argparse.Namespace) -> None:
+    import infoseek
+    print(infoseek.help())
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="infoseek", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="command")
+
+    # simple one-liners (sync, text in / text out)
+    f = sub.add_parser("find", help="search the web (simple, formatted for reading)")
+    f.add_argument("query", nargs="?")
+    _add_common(f)
+    f.set_defaults(func=cmd_find)
+
+    r = sub.add_parser("research", help="search + read the best pages -> context to answer from")
+    r.add_argument("query")
+    r.add_argument("--budget", type=int, default=1500, help="approx output token budget")
+    r.add_argument("--fresh", action="store_true")
+    r.set_defaults(func=cmd_research)
+
+    d = sub.add_parser("deep", help="multi-angle research brief (slower, broader)")
+    d.add_argument("query")
+    d.add_argument("--budget", type=int, default=3000, help="approx output token budget")
+    d.add_argument("--angles", type=int, default=3, help="how many query variants (1-5)")
+    d.add_argument("--fresh", action="store_true")
+    d.set_defaults(func=cmd_deep)
+
+    rd = sub.add_parser("read", help="clean text from one URL (guard denies injection content)")
+    rd.add_argument("url")
+    rd.add_argument("--max-chars", type=int, default=2000)
+    rd.add_argument("--fresh", action="store_true")
+    rd.set_defaults(func=cmd_read)
+
+    h = sub.add_parser("help", help="print the usage card")
+    h.set_defaults(func=cmd_help)
 
     # search (also the default for --query)
     s = sub.add_parser("search", help="multi-engine web search")

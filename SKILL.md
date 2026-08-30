@@ -8,7 +8,7 @@ description: >-
   clean text from a URL ("search for", "look up", "research", "find sources", "news
   about", "what does X do", "ask the web"). No API keys needed; optional
   Brave/Serper/SearXNG keys make it stronger when present.
-version: 0.3.0
+version: 0.4.0
 author: TruftedBug89
 license: MIT
 platforms: [linux, macos, windows]
@@ -50,12 +50,38 @@ by the other harnesses.
 Prefer the **MCP server** when the harness supports it: `pip install
 "infoseek[mcp]"` then register command `python -m infoseek.mcp` (opencode:
 `mcp.infoseek` in `opencode.json`; Claude Code: `claude mcp add infoseek -- python -m infoseek.mcp`).
-Exposes `search`, `ask`, `extract`, `scan`, `suggest`, `status`, `selfcheck`,
-`run` as native tools with no API keys.
+Exposes `find`, `research`, `read`, `deep`, `help` (simple, short descriptions,
+listed first) plus `search`, `ask`, `extract`, `scan`, `suggest`, `status`,
+`selfcheck`, `run` as native tools with no API keys.
 
 ## Call from kernel (Python API)
 
-All public functions are async; `scan()` is sync.
+**Start with the sync one-liners** — plain calls, text in / text out, no asyncio,
+never raise. Use them unless you specifically need structured data.
+
+```python
+import infoseek
+
+infoseek.find("rust vs go 2026")             # -> str: ranked results + urls
+infoseek.research("why is redis fast")        # -> str: context to answer from
+infoseek.read("https://example.com/a")        # -> str: clean page text
+infoseek.deep("llm quantization")             # -> str: multi-angle brief (slower)
+infoseek.help()                               # -> str: usage card
+```
+
+| you want | call |
+|---|---|
+| links / sources to cite | `find()` |
+| facts to answer a question | `research()` |
+| the text of one known page | `read()` |
+| a broader, slower, multi-angle brief | `deep()` |
+
+`budget=` caps output size in tokens (~4 chars each); `fresh=True` bypasses cache.
+Errors never raise — they return as `[[...]]` notes, so rephrase and retry instead
+of crashing the turn.
+
+Async API (structured data, full control): `search` / `ask` / `extract` /
+`suggest` / `status` / `selfcheck`; `scan()` is sync.
 
 ```python
 import infoseek
@@ -86,6 +112,14 @@ For answer synthesis use `ask()` directly and hand its output to the LLM.
 ## CLI
 
 ```bash
+# simple (text in / text out)
+infoseek find "rust vs go"                  # ranked results
+infoseek research "why is redis fast"       # context to answer from
+infoseek deep "llm quantization"            # multi-angle brief
+infoseek read https://example.com/article   # one page, clean text
+infoseek help                               # usage card
+
+# advanced
 infoseek search "rust vs go" --n 6          # formatted results
 infoseek search "rust vs go" --json         # machine-readable
 infoseek ask "best self-hosted vector db" --budget 2000

@@ -14,7 +14,14 @@ Built-in prompt-injection guard (infoseek.scan): layered heuristic detection
 of hijack/framing/exfiltration/jailbreak/obfuscated content; ask() denies
 blocked sources, extract() replaces them with a denial note.
 
-Public API (all async):
+Simple API (sync — for agents and small models, no asyncio needed):
+    infoseek.find("query")       -> str   search: ranked results with urls
+    infoseek.research("question")-> str   search + read: context to answer from
+    infoseek.read("https://url") -> str   one page: clean text
+    infoseek.deep("topic")       -> str   multi-angle research brief
+    infoseek.help()              -> str   usage card
+
+Async API (structured data / full control):
     infoseek.scan(text, url='') -> Verdict  # prompt-injection guard (sync, cached)
     await infoseek.search(query, n=6, engines="auto", fresh=False) -> list[dict]
     await infoseek.ask(query, n=5, extract_top=2, budget=2500, fresh=False) -> str
@@ -27,7 +34,7 @@ Query routing (prefixes / site: filters):
     ddg:, brave:, serper:, searxng:, site:reddit.com, site:stackoverflow.com, ...
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 import asyncio, os, re
 from urllib.parse import urlparse
@@ -42,6 +49,7 @@ def guard_module_policy():
     return guard_policy.lower() != "off"  # prompt-injection check on any retrieved text
 from .format import fmt_bundle, fmt_search, fmt_status
 from .net import PoliteClient
+from .simple import find, research, read, deep, help  # sync one-liners for agents
 from .rank import Result, clean, dedupe, merge, normalize_url, to_dicts
 
 _client: PoliteClient | None = None
@@ -156,7 +164,8 @@ async def run(query: str, n: int = 6, engines: str = "auto", fresh: bool = False
     return fmt_search([Result(**d) for d in res])
 
 
-__all__ = ["run", "search", "ask", "extract", "suggest", "status", "selfcheck", "Result"]
+__all__ = ["run", "search", "ask", "extract", "suggest", "status", "selfcheck", "Result",
+           "find", "research", "read", "deep", "help"]
 
 
 def _pick_targets(merged: list, query: str, k: int) -> list:

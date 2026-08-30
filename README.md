@@ -15,19 +15,41 @@ pip install git+https://github.com/TruftedBug89/infoseek
 ```
 
 ```python
-import asyncio, infoseek
+import infoseek
 
-out = asyncio.run(infoseek.ask("why is redis faster than postgres", budget=2000))
-print(out)   # ~500 tokens of curated, guard-screened context for your LLM
+print(infoseek.research("why is redis faster than postgres", budget=2000))
+# one line, no asyncio, no API key -> curated, guard-screened context for your LLM
 ```
 
 ```console
-$ infoseek ask "why is redis faster than postgres"
+$ infoseek research "why is redis faster than postgres"
 QUERY: why is redis faster than postgres
 ## SEARCH RESULTS
 1. Why is Postgres query faster than Redis query?
    [so · ✓ 3 · 2 answers]  ...
 ```
+
+## Quick start — four calls, no asyncio
+
+Designed so even a small local model can use it: every call is **sync**, takes a
+string, returns a string, and never raises (errors come back as `[[...]]` notes).
+
+```python
+import infoseek
+
+infoseek.find("rust vs go 2026")              # search  -> ranked results with urls
+infoseek.research("why is redis fast")         # answer  -> context to answer from
+infoseek.read("https://example.com/article")   # page    -> clean text
+infoseek.deep("llm quantization tradeoffs")    # brief   -> multi-angle research
+infoseek.help()                                # usage card, call it to re-learn
+```
+
+| you want | call |
+|---|---|
+| links / sources to cite | `find()` |
+| facts to answer a question | `research()` |
+| the text of one known page | `read()` |
+| a broader, slower, multi-angle brief | `deep()` |
 
 ---
 
@@ -45,6 +67,9 @@ QUERY: why is redis faster than postgres
 
 - **15 keyless engines** — general web, news, forums, code, papers, biomedical,
   facts — all via official APIs or server-rendered HTML (no Google scraping, no CAPTCHA bypass)
+- **Sync one-liners for agents** — `find()` / `research()` / `read()` / `deep()` take a
+  string and return a string; no asyncio, no config, errors come back as short
+  `[[...]]` notes instead of exceptions, so even small local models can drive it
 - **`ask()` context bundles** — Tavily `/context` equivalent: search → pick the best
   pages → keep only the sentences relevant to your query → trim to a token budget
 - **Quality-scored merge** — source priority + engine rank + recency bonus,
@@ -79,6 +104,14 @@ Optional keys make search stronger but are **never required** — set any of
 ## CLI
 
 ```console
+# simple (text in / text out)
+$ infoseek find "rust vs go"                    # ranked results
+$ infoseek research "why is redis fast"         # context to answer from
+$ infoseek deep "llm quantization"              # multi-angle brief
+$ infoseek read https://example.com/article     # one page, clean text
+$ infoseek help                                 # usage card
+
+# advanced
 $ infoseek search "retrieval augmented generation" --n 5
 $ infoseek search "rust vs go" --json          # machine-readable
 $ infoseek ask "why is redis faster than postgres" --budget 2000
@@ -93,6 +126,9 @@ $ infoseek selfcheck
 Compatibility shorthand: `infoseek --query "..." --n 4` behaves like `search`.
 
 ## Python API
+
+> **New in 0.4.0:** sync one-liners (`find` / `research` / `read` / `deep` / `help`) —
+> see *Quick start* above. The async API below is unchanged and returns structured data.
 
 ```python
 import asyncio, infoseek
@@ -186,8 +222,10 @@ Cursor, Windsurf, Continue, Goose — anything that speaks MCP), and as a
 ### MCP server (opencode, Claude Code, Cursor, ...)
 
 The one integration to rule them all: install once, every MCP-capable harness
-gets `search` / `ask` / `extract` / `scan` / `suggest` / `status` / `selfcheck`
-/ `run` as native tools. **MCP is additive** — the Prime Agent / Hermes Python
+gets `find` / `research` / `read` / `deep` / `help` plus `search` / `ask` /
+`extract` / `scan` / `suggest` / `status` / `selfcheck` / `run` as native tools.
+The simple tools come first in the list, with short descriptions, so small
+models pick the right one. **MCP is additive** — the Prime Agent / Hermes Python
 API and skill paths keep working exactly as before, no MCP required for them.
 
 ```bash
@@ -312,7 +350,7 @@ await infoseek.selfcheck()
 
 ```bash
 pip install -e ".[dev]"
-pytest                # 20 offline unit tests (guard battery, ranking, routing, API)
+pytest                # 36 offline unit tests (guard battery, ranking, routing, API, simple API)
 pytest -m live        # + 16 live engine probes + ask() smoke (network required)
 ```
 

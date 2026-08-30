@@ -4,11 +4,13 @@ from infoseek import resolve_engines
 
 
 def test_version():
-    assert infoseek.__version__ == "0.3.0"
+    assert infoseek.__version__ == "0.4.0"
 
 
 def test_public_functions_exist():
-    for name in ("search", "ask", "extract", "scan", "suggest", "status", "selfcheck"):
+    for name in ("search", "ask", "extract", "scan", "suggest", "status", "selfcheck",
+                 # simple sync API
+                 "find", "research", "read", "deep", "help"):
         assert callable(getattr(infoseek, name)), name
 
 
