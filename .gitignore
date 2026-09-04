@@ -27,3 +27,36 @@ Thumbs.db
 # Editor
 .idea/
 .vscode/
+
+# AI Agents, Assistants & IDE State
+.commandcode/
+commandcode/
+.prime-agent/
+prime-agent/
+primeagent/
+.claude/
+.claude-code/
+claude-code/
+.gemini/
+.agent/
+agent/
+.opencode/
+opencode/
+.cursor/
+.cursorrules
+.cline/
+.roo/
+.chatgpt/
+.aider*
+.agy/
+.antigravity/
+.jules/
+.Jules/
+.qwen/
+.deepseek/
+.copilot/
+.continue/
+.windsurf/
+brain/
+.system_generated/
+*.agent.log
