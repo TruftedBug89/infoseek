@@ -57,6 +57,8 @@ def _meta_desc(html: str) -> str:
 def _trim(text: str, max_chars: int) -> str:
     if not text:
         return ""
+    if max_chars <= 0:
+        return text.strip()
     text = re.sub(r"[ \t]+", " ", text).strip()
     if len(text) <= max_chars:
         return text
@@ -187,21 +189,89 @@ async def _hn_item(client: PoliteClient, url: str, max_chars: int) -> str:
 
 
 async def _reddit(client: PoliteClient, url: str, max_chars: int) -> str:
+    """Fetch one Reddit post with its top community comments.
+    Tries Reddit .json endpoint with desktop browser UA, falls back to pullpush."""
+    clean_url = url.split("?")[0].rstrip("/")
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    try:
+        r = await client.get(f"{clean_url}.json", headers={"User-Agent": ua}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and len(data) >= 1:
+                post_data = data[0].get("data", {}).get("children", [{}])[0].get("data", {})
+                title = post_data.get("title", "")
+                sub = post_data.get("subreddit", "")
+                author = post_data.get("author", "")
+                score = post_data.get("score", 0)
+                selftext = post_data.get("selftext", "")
+                parts = [f"r/{sub} · {title} (score: {score}, by u/{author})\n\n{selftext}"]
+                if len(data) >= 2:
+                    parts.append("\nTop Community Comments:")
+                    comments = data[1].get("data", {}).get("children", [])
+                    for c in comments[:8]:
+                        cd = c.get("data", {})
+                        c_body = cd.get("body", "")
+                        c_auth = cd.get("author", "")
+                        c_score = cd.get("score", 0)
+                        if c_body and c_body not in ("[deleted]", "[removed]"):
+                            parts.append(f"· u/{c_auth} ({c_score} pts): {_trim(c_body, 300)}")
+                return _trim("\n".join(parts), max_chars)
+    except Exception:
+        pass
+
     m = re.search(r"/comments/([a-z0-9]+)", url)
+    if m:
+        try:
+            r = await client.get("https://api.pullpush.io/reddit/search/submission/",
+                                 params={"ids": m.group(1)}, retries=0, timeout=10)
+            if r.status_code == 200:
+                data = (r.json().get("data") or [])
+                if data:
+                    x = data[0]
+                    return _trim(f"{x.get('title','')} — r/{x.get('subreddit','')} (score: {x.get('score',0)})\n\n{x.get('selftext') or '(link post)'}", max_chars)
+        except Exception:
+            pass
+    return ""
+
+
+async def _polymarket_event(client: PoliteClient, url: str, max_chars: int) -> str:
+    """Extract Polymarket event market data (odds, volume, question)."""
+    m = re.search(r"/(?:event|market)/([a-zA-Z0-9_-]+)", url)
     if not m:
         return ""
+    slug = m.group(1)
     try:
-        r = await client.get("https://api.pullpush.io/reddit/search/submission/",
-                             params={"ids": m.group(1)}, retries=0)
-        if r.status_code != 200:
-            return ""  # let the access ladder try the Wayback Machine
+        import json as _j
+        r = await client.get(f"https://gamma-api.polymarket.com/events?slug={slug}", timeout=10)
+        if r.status_code == 200:
+            events = r.json() or []
+            if events and isinstance(events, list):
+                ev = events[0]
+                title = ev.get("title") or ev.get("question") or ""
+                desc = ev.get("description") or ""
+                vol = float(ev.get("volume") or 0)
+                vol_fmt = f"${vol/1_000_000:.1f}M" if vol >= 1_000_000 else f"${vol/1_000:.1f}K" if vol >= 1_000 else f"${vol:.0f}"
+                markets = ev.get("markets") or []
+                lines = [f"Polymarket: {title} (Total Volume: {vol_fmt})", ""]
+                if desc:
+                    lines.append(f"Description: {desc[:400]}")
+                    lines.append("")
+                lines.append("Markets & Odds:")
+                for mkt in markets[:5]:
+                    q_text = mkt.get("question") or title
+                    try:
+                        outcomes = _j.loads(mkt.get("outcomes", "[]")) if isinstance(mkt.get("outcomes"), str) else (mkt.get("outcomes") or [])
+                        prices = _j.loads(mkt.get("outcomePrices", "[]")) if isinstance(mkt.get("outcomePrices"), str) else (mkt.get("outcomePrices") or [])
+                        odds = []
+                        for oc, pr in zip(outcomes, prices):
+                            odds.append(f"{oc}: {round(float(pr)*100)}%")
+                        lines.append(f"- {q_text}: {' · '.join(odds)}")
+                    except Exception:
+                        pass
+                return _trim("\n".join(lines), max_chars)
     except Exception:
-        return ""
-    data = (r.json().get("data") or [])
-    if not data:
-        return ""
-    x = data[0]
-    return _trim(f"{x.get('title','')} — r/{x.get('subreddit','')}\n\n{x.get('selftext') or '(link post)'}", max_chars)
+        pass
+    return ""
 
 
 async def _pypi_pkg(client: PoliteClient, url: str, max_chars: int) -> str:
@@ -298,7 +368,13 @@ async def _live_extract(client: PoliteClient, url: str, path: str, max_chars: in
         return _trim(r.text, max_chars)
     if "html" not in ctype and "text" not in ctype:
         return ""
-    return _html_to_text(r.text, url, max_chars)
+    text = _html_to_text(r.text, url, max_chars)
+    if not text and r.text:
+        soup = BeautifulSoup(r.text, "lxml")
+        raw = soup.get_text("\n", strip=True)
+        if raw:
+            text = _trim(raw, max_chars)
+    return text
 
 
 async def _wayback_snapshot(client: PoliteClient, url: str) -> str:
@@ -415,13 +491,15 @@ async def _access_ladder(client: PoliteClient, url: str, path: str, max_chars: i
     return txt
 
 
-async def extract_url(client: PoliteClient, url: str, max_chars: int = 2000) -> str:
+async def extract_url(client: PoliteClient, url: str, max_chars: int = 10000) -> str:
     """Fetch and extract clean text from one URL.
 
     Domain fast paths (GitHub/Wikipedia/HN/Reddit/PyPI/crates/raw files) use
     official APIs first; anything that comes back empty climbs the access
     ladder (live fetch -> Wayback Machine -> Jina Reader if JINA_API_KEY set)."""
     parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return ""
     host = parsed.netloc.lower()
     path = parsed.path
 
@@ -477,6 +555,9 @@ async def extract_url(client: PoliteClient, url: str, max_chars: int = 2000) -> 
         return txt or await _access_ladder(client, url, path, max_chars)
     if "reddit.com" in host:
         txt = await _reddit(client, url, max_chars)
+        return txt or await _access_ladder(client, url, path, max_chars)
+    if "polymarket.com" in host and ("/event/" in url or "/market/" in url):
+        txt = await _polymarket_event(client, url, max_chars)
         return txt or await _access_ladder(client, url, path, max_chars)
     if "pypi.org" in host and "/project/" in url:
         txt = await _pypi_pkg(client, url, max_chars)

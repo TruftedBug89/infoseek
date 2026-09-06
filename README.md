@@ -18,19 +18,21 @@ bundle = asyncio.run(infoseek.ask("why is redis faster than postgres", budget=20
 print(bundle)   # ~500 tokens of curated, guard-screened context for your LLM
 ```
 
-## The four primitives
+## The five primitives
 
 | call | returns | use when |
 |---|---|---|
 | `await infoseek.search(q, n=6)` | `list[dict]` of results | you want links + snippets |
 | `await infoseek.ask(q, budget=2500)` | context-bundle string | you want text the model can answer from directly |
+| `await infoseek.last30days(q, days=30)` | curated social & consensus brief | you want people's discussions, real-world consensus, sentiment, or prediction odds |
 | `await infoseek.extract(url, max_chars=2000)` | clean page text | you already have a URL |
 | `infoseek.scan(text)` (sync) | verdict: `ok` / `suspect` / `blocked` | you fetched text yourself and want it screened |
 
 **For agents that want zero decisions:** `await infoseek.run(q)` routes by
-query shape — bare URL → extract, `ask: ...` → context bundle, error-message
-text → fixes-first research, version question → compat research, anything
-else → search. `infoseek.help()` returns a 20-line cheat sheet of the whole
+query shape — bare URL → extract, `ask: ...` → context bundle,
+`last30days: ...` (or questions like "what are people saying about X") → social brief,
+error-message text → fixes-first research, version question → compat research, anything
+else → search. `infoseek.help()` returns a cheat sheet of the whole
 surface. `ask()` auto-reformulates and retries once when first-round results
 are poor.
 
@@ -57,10 +59,34 @@ relevance-sentence extraction, budget caps).
 |---|---|---|
 | API key | never needed | required (paid) |
 | Cost | free | metered |
-| Sources | 29 keyless engines + archive access ladder | 1 index |
+| Sources | 33 keyless engines + prediction markets + archive ladder | 1 index |
 | Prompt-injection guard | built in, µs-fast | not included |
 
-## Engines (26 keyless + 3 optional keyed)
+## Searching people, not editors (`last30days`)
+
+Google and traditional search engines index marketing copy, vendor docs, and SEO spam. AI agents researching tools, libraries, or real-world events need to know what **practitioners and real people are experiencing right now**.
+
+`infoseek.last30days(q, days=30, budget=2500)` delivers grounded, time-windowed community consensus and social signal:
+
+* **Strict Temporal Windowing**: Computes exact verification windows (default: past 30 days) and verifies dates to filter out stale discussions.
+* **Keyless Social Fan-out**: Queries Reddit (via Atom RSS + comment parsing), Hacker News (Algolia API), Polymarket (real-money prediction odds & liquidity), Techmeme, Bluesky, and StockTwits concurrently.
+* **Engagement-Weighted Ranking**: Results are boosted by real social validation—Reddit upvotes, comment density, and prediction volume—so high-signal discussions outrank noise.
+* **Head-to-Head Comparison Mode**: Automatically detects `X vs Y` queries (e.g. `uv vs poetry`, `Claude Code vs Cursor`) to output side-by-side consensus, comparative sentiment, and strengths/weaknesses.
+* **Comment & Consensus Extraction**: Fetches top comments and practitioner quotes (`u/author (score pts): "..."`) directly into the brief within strict token budgets.
+
+```python
+import asyncio, infoseek
+
+# General community consensus brief
+brief = asyncio.run(infoseek.last30days("Claude Code", days=14))
+print(brief)
+
+# Head-to-head comparison
+vs_brief = asyncio.run(infoseek.last30days("uv vs poetry"))
+print(vs_brief)
+```
+
+## Engines (33 keyless + 3 optional keyed)
 
 Prefix the query to focus a source; no prefix hits the default mix
 (`ddg + hn + so + reddit + news`). `site:<domain>` auto-routes.
@@ -70,7 +96,7 @@ Prefix the query to focus a source; no prefix hits the default mix
 | *(none)* | DuckDuckGo + HN + SO + Reddit + News | `arxiv:` | arXiv papers |
 | `ddg:` | DuckDuckGo only | `openalex:` / `s2:` | scholarly works (OpenAlex) |
 | `hn:` | Hacker News (Algolia API) | `pubmed:` / `pm:` | biomedical (NCBI) |
-| `reddit:` | Reddit | `doi:` | DOI / citations (Crossref) |
+| `reddit:` | Reddit (Atom RSS + discussion comments) | `doi:` | DOI / citations (Crossref) |
 | `so:` | Stack Overflow / Exchange | `wikidata:` / `wd:` | structured facts (Q-IDs) |
 | `news:` | Google News RSS | `gh:` | GitHub repos |
 | `wiki:` | Wikipedia | `code:` | code search (grep.app) |
@@ -82,6 +108,8 @@ Prefix the query to focus a source; no prefix hits the default mix
 | `changelog:` | changelog finder | `error:` | error message → fixes |
 | `compat:` | version compatibility | `wayback:`/`wb:` | Wayback Machine snapshots |
 | `commoncrawl:`/`cc:` | Common Crawl index | `swarm:` | SearXNG instance swarm |
+| `polymarket:` / `poly:` | Polymarket prediction odds & volume | `techmeme:` | Techmeme breaking tech news |
+| `bluesky:` / `bsky:` | Bluesky social posts & sentiment | `stocktwits:` / `twits:` | StockTwits ticker & cashtag streams |
 
 `engines="wide"` switches `search()` to the maximum-coverage mix
 (ddg + swarm + hn + so + news).
@@ -96,6 +124,7 @@ limits.
 ```bash
 infoseek search "retrieval augmented generation" --n 5 [--json] [--freshness week]
 infoseek ask "best self-hosted vector db" --budget 2000 [--json]
+infoseek last30days "Claude Code" [--days 30] [--budget 2500] [--json]
 infoseek extract https://example.com/article [--max-chars 2000]
 infoseek scan --text "..." | --url https://...     # exit 2 if blocked
 infoseek suggest "python asyn"
@@ -152,7 +181,7 @@ spaced-letter obfuscation, encoded payloads, and directive density. Policy:
 
 * **Python library** — `import infoseek` (this README).
 * **MCP server** — `pip install "infoseek[mcp]"`, then register stdio
-  command `python -m infoseek.mcp`. Exposes `search`, `ask`, `extract`,
+  command `python -m infoseek.mcp`. Exposes `search`, `ask`, `last30days`, `extract`,
   `scan`, `suggest`, `status`, `selfcheck`, `run` as native tools in
   opencode / Claude Code / Cursor / Windsurf / Continue / Goose.
 * **Skill** — the repo root is a skill layout (`SKILL.md`); point

@@ -1,12 +1,13 @@
 """infoseek — command-line interface (stdlib argparse, no extra deps).
 
 Subcommands:
-    search   multi-engine web search (default)
-    ask      context bundle for LLM answering
-    extract  clean text from one URL (with prompt-injection guard)
-    scan     run the prompt-injection guard on a text/URL
-    suggest  DuckDuckGo autocomplete
-    status   engine availability + last errors
+    search     multi-engine web search (default)
+    ask        context bundle for LLM answering
+    last30days research what people say in the last 30 days (Reddit, HN, Polymarket)
+    extract    clean text from one URL (with prompt-injection guard)
+    scan       run the prompt-injection guard on a text/URL
+    suggest    DuckDuckGo autocomplete
+    status     engine availability + last errors
     selfcheck  run the full test battery (unit + live engines)
 
 Compatibility: `infoseek --query "..."` is equivalent to `infoseek search "..."`.
@@ -60,6 +61,17 @@ def cmd_ask(a: argparse.Namespace) -> None:
         out = await infoseek.ask(a.query, n=a.n, extract_top=a.extract_top,
                                  budget=a.budget, fresh=a.fresh,
                                  freshness=a.freshness, format="json" if a.json else "text")
+        print(out if isinstance(out, str) else json.dumps(out, indent=2))
+
+    _run(go())
+
+
+def cmd_last30days(a: argparse.Namespace) -> None:
+    import infoseek
+
+    async def go():
+        out = await infoseek.last30days(a.query, days=a.days, n=a.n, budget=a.budget,
+                                        fresh=a.fresh, format="json" if a.json else "text")
         print(out if isinstance(out, str) else json.dumps(out, indent=2))
 
     _run(go())
@@ -143,6 +155,15 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--freshness", help="recency limit: day|week|month|year|7d")
     a.add_argument("--json", action="store_true", help="structured bundle with source/guard metadata")
     a.set_defaults(func=cmd_ask)
+
+    l30 = sub.add_parser("last30days", help="research what people say in the last 30 days (Reddit, HN, Polymarket, Techmeme)")
+    l30.add_argument("query", help="topic or comparison (e.g. 'Rust vs Go')")
+    l30.add_argument("--days", type=int, default=30, help="recency window in days (default 30)")
+    l30.add_argument("-n", type=int, default=8, help="max discussion items")
+    l30.add_argument("--budget", type=int, default=2500, help="approx output token budget")
+    l30.add_argument("--fresh", action="store_true", help="bypass cache")
+    l30.add_argument("--json", action="store_true", help="structured JSON output")
+    l30.set_defaults(func=cmd_last30days)
 
     e = sub.add_parser("extract", help="clean text from a URL (guard denies injection content)")
     e.add_argument("url")

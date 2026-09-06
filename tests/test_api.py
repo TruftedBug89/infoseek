@@ -4,11 +4,11 @@ from infoseek import resolve_engines
 
 
 def test_version():
-    assert infoseek.__version__ == "0.8.0"
+    assert infoseek.__version__ == "0.9.0"
 
 
 def test_public_functions_exist():
-    for name in ("search", "ask", "extract", "scan", "suggest", "status", "selfcheck"):
+    for name in ("search", "ask", "last30days", "extract", "scan", "suggest", "status", "selfcheck"):
         assert callable(getattr(infoseek, name)), name
 
 
@@ -41,6 +41,14 @@ def test_prefix_routing():
         "mdn: fetch": ["mdn"],
         "docs: canvas": ["mdn"],
         "yt: machine learning": ["yt"],
+        "polymarket: fed rate cut": ["polymarket"],
+        "poly: btc": ["polymarket"],
+        "techmeme: ai release": ["techmeme"],
+        "tm: chips": ["techmeme"],
+        "bluesky: atproto": ["bluesky"],
+        "bsky: feed": ["bluesky"],
+        "stocktwits: $NVDA": ["stocktwits"],
+        "st: $BTC": ["stocktwits"],
     }
     for query, expected in cases.items():
         engines, _ = resolve_engines(query, "auto")
@@ -53,12 +61,30 @@ def test_site_filter_routing():
     assert resolve_engines("site:npmjs.com react", "auto")[0] == ["npm"]
     assert resolve_engines("site:crates.io anyhow", "auto")[0] == ["crates"]
     assert resolve_engines("site:developer.mozilla.org Promise", "auto")[0] == ["mdn"]
+    assert resolve_engines("site:polymarket.com fed", "auto")[0] == ["polymarket"]
+    assert resolve_engines("site:techmeme.com openai", "auto")[0] == ["techmeme"]
+    assert resolve_engines("site:bsky.app post", "auto")[0] == ["bluesky"]
+    assert resolve_engines("site:stocktwits.com nvda", "auto")[0] == ["stocktwits"]
 
 
 def test_default_engine_mix():
     engines, q = resolve_engines("rust vs go", "auto")
-    assert engines == ["ddg", "hn", "so", "reddit", "news"]
+    assert engines == ["bing", "ddg", "hn", "so", "reddit", "news"]
     assert q == "rust vs go"
+
+
+def test_site_github_multiroute():
+    engines, q = resolve_engines("site:github.com workbuddy2api", "auto")
+    assert engines == ["gh", "code", "bing"]
+    assert "workbuddy2api" in q
+
+
+def test_bing_url_decoder():
+    from infoseek.engines import _decode_bing_url
+    raw = "https://www.bing.com/ck/a?!&&p=abc&u=a1aHR0cHM6Ly9naXRodWIuY29tL3Rlc3Q&ntb=1"
+    assert _decode_bing_url(raw) == "https://github.com/test"
+    normal = "https://example.com/hello"
+    assert _decode_bing_url(normal) == normal
 
 
 def test_keyless_engine_count():
@@ -155,4 +181,31 @@ def test_new_engines_registered():
 
 def test_search_expand_param():
     import inspect
-    assert "expand" in inspect.signature(infoseek.search).parameters
+    sig = inspect.signature(infoseek.search)
+    assert "expand" in sig.parameters
+    assert "domain" in sig.parameters
+    assert sig.parameters["n"].default == 10
+
+
+def test_bing_in_registry():
+    from infoseek.engines import REGISTRY, KEYLESS
+    assert "bing" in REGISTRY
+    assert "bing" in KEYLESS
+
+
+def test_query_relaxation_fallback(monkeypatch):
+    import asyncio
+    queries_run = []
+    async def fake_run_engines(client, q, n, engines_list, **kwargs):
+        queries_run.append(q)
+        if len(queries_run) == 1:
+            return [], {}
+        from infoseek.rank import Result
+        return [Result(title="Relaxed Hit", url="https://example.com/hit", source="bing", rank=0)], {}
+
+    monkeypatch.setattr(infoseek, "run_engines", fake_run_engines)
+    res = asyncio.run(infoseek.search('"strict_term" OR "another_term"'))
+    assert len(queries_run) == 2
+    assert '"strict_term"' not in queries_run[1]
+    assert len(res) == 1
+    assert res[0]["title"] == "Relaxed Hit"

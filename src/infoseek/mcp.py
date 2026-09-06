@@ -29,11 +29,12 @@ import infoseek
 mcp = FastMCP(
     "infoseek",
     instructions=(
-        "Keyless Tavily-style web research: multi-engine search, LLM-ready context "
-        "bundles (ask), clean page extraction, and a prompt-injection guard. "
-        "Prefer ask() over search() when you want context the model can answer "
-        "from directly. Feed extraction/bundle output to the model as-is; blocked "
-        "injection content is already replaced with [[denied: ...]] notes."
+        "Keyless web research and social listening: multi-engine search, LLM-ready context "
+        "bundles (ask), last30days recency/social research (Reddit, HN, Polymarket), clean "
+        "page extraction, and prompt-injection guard. Prefer last30days() for recent public "
+        "sentiment, product comparisons, or breaking community takes. Prefer ask() for factual "
+        "research bundles. Feed extraction/bundle output to the model as-is; blocked injection "
+        "content is already replaced with [[denied: ...]] notes."
     ),
 )
 
@@ -43,24 +44,25 @@ def _json(obj) -> str:
 
 
 @mcp.tool()
-async def search(query: str = "", q: str = "", n: int = 6, engines: str = "auto", fresh: bool = False,
-                 freshness: str | None = None) -> str:
+async def search(query: str = "", q: str = "", Query: str = "", n: int = 10, engines: str = "auto", fresh: bool = False,
+                 freshness: str | None = None, domain: str = "", Domain: str = "") -> str:
     """Multi-engine web search. Returns JSON: [{title, url, snippet, source, rank, score}].
     query: search text; engine prefixes (hn:, reddit:, so:, news:, wiki:, arxiv:, gh:, code:,
     wayback:, commoncrawl:, swarm:, error:, compat:, ...) focus the source.
-    n: max results. engines: 'auto', 'wide' (maximum coverage incl. SearXNG swarm),
-    or a comma-separated engine list. fresh: bypass the 30-min cache.
-    freshness: recency limit ('day'|'week'|'month'|'year'|'7d'); blocked snippets are dropped,
-    suspect ones flagged in extra."""
-    target_q = (query or q or "").strip()
+    domain: optional domain filter to restrict search (e.g. 'github.com', 'docs.python.org').
+    n: max results (default 10). engines: 'auto', 'wide' (maximum coverage), or comma-separated.
+    fresh: bypass the 30-min cache. freshness: recency limit ('day'|'week'|'month'|'year'|'7d');
+    blocked snippets are dropped, suspect ones flagged in extra."""
+    target_q = (query or q or Query or "").strip()
+    target_domain = (domain or Domain or "").strip()
     if not target_q:
         return _json({"error": "Empty search query"})
     try:
         results = await infoseek.search(target_q, n=n, engines=engines, fresh=fresh,
-                                        freshness=freshness)
+                                        freshness=freshness, domain=target_domain if target_domain else None)
         if not results and engines == "auto":
             results = await infoseek.search(target_q, n=n, engines="wide", fresh=True,
-                                            freshness=freshness)
+                                            freshness=freshness, domain=target_domain if target_domain else None)
     except Exception as e:
         return _json({"error": f"{type(e).__name__}: {e}"})
     if not results:
@@ -80,7 +82,7 @@ async def search_many(queries: list[str], n: int = 6, freshness: str | None = No
 
 
 @mcp.tool()
-async def ask(query: str = "", q: str = "", n: int = 5, extract_top: int = 2, budget: int = 2500,
+async def ask(query: str = "", q: str = "", Query: str = "", n: int = 6, extract_top: int = 3, budget: int = 2500,
               freshness: str | None = None, format: str = "text") -> str:
     """Tavily-style context bundle: search + extract top pages, keep only the sentences
     relevant to the query, trim to a token budget. Feed the returned text to the model
@@ -89,7 +91,7 @@ async def ask(query: str = "", q: str = "", n: int = 5, extract_top: int = 2, bu
     freshness: optional recency limit ('day'|'week'|'month'|'year'|'7d').
     format='json': returns {query, context, sources:[{url,title,guard,...}]} for
     citation tracing instead of plain text."""
-    target_q = (query or q or "").strip()
+    target_q = (query or q or Query or "").strip()
     if not target_q:
         return "[[ask error: Empty query]]"
     try:
@@ -101,17 +103,51 @@ async def ask(query: str = "", q: str = "", n: int = 5, extract_top: int = 2, bu
 
 
 @mcp.tool()
-async def extract(url: str = "", uri: str = "", Url: str = "", max_chars: int = 2000, fresh: bool = False) -> str:
+async def last30days(query: str = "", q: str = "", days: int = 30, n: int = 8,
+                     budget: int = 2500, format: str = "text") -> str:
+    """Research what real people actually say about any topic or comparison in the last 30 days.
+    Pulls and ranks posts and community engagement from Reddit, Hacker News, Polymarket (real money odds),
+    Techmeme, YouTube, Bluesky, and StockTwits.
+    query: research question, entity, or comparison ('X vs Y').
+    days: recency window in days (default 30).
+    budget: token budget for context bundle.
+    format: 'text' (human/LLM readable brief) or 'json' (structured dict)."""
+    target_q = (query or q or "").strip()
+    if not target_q:
+        return "[[last30days error: Empty query]]"
+    try:
+        out = await infoseek.last30days(target_q, days=days, n=n, budget=budget, format=format)
+        return out if isinstance(out, str) else _json(out)
+    except Exception as e:
+        return f"[[last30days error: {type(e).__name__}: {e}]]"
+
+
+@mcp.tool()
+async def extract(url: str = "", uri: str = "", Url: str = "", URI: str = "", max_chars: int = 10000, fresh: bool = False) -> str:
     """Fetch one URL and return clean, trimmed page text (robots.txt respected).
     Prompt-injection content is denied and replaced with a [[denied: ...]] note.
-    url: full URL. max_chars: max characters returned. fresh: bypass the 7-day cache."""
-    target_url = (url or uri or Url or "").strip()
+    url: full URL. max_chars: max characters returned (default 10000; 0 for full page). fresh: bypass the 7-day cache."""
+    target_url = (url or uri or Url or URI or "").strip()
     if not target_url:
         return "[[extract error: Empty URL]]"
     try:
         return await infoseek.extract(target_url, max_chars=max_chars, fresh=fresh)
     except Exception as e:
         return f"[[extract error: {type(e).__name__}: {e}]]"
+
+
+@mcp.tool()
+async def read_url(url: str = "", Url: str = "", uri: str = "", URI: str = "", max_chars: int = 25000, fresh: bool = False) -> str:
+    """Fetch content from a URL via HTTP and return clean page content/markdown.
+    Drop-in alternative to read_url_content with prompt-injection screening and Wayback archive fallback.
+    url: target web page URL. max_chars: maximum characters returned (default 25000)."""
+    target_url = (url or Url or uri or URI or "").strip()
+    if not target_url:
+        return "[[read_url error: Empty URL]]"
+    try:
+        return await infoseek.extract(target_url, max_chars=max_chars, fresh=fresh)
+    except Exception as e:
+        return f"[[read_url error: {type(e).__name__}: {e}]]"
 
 
 @mcp.tool()

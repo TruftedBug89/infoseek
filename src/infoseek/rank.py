@@ -2,6 +2,7 @@
 from dataclasses import dataclass, asdict
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 from difflib import SequenceMatcher
+import math
 import re
 
 TRACKING = {"utm_source","utm_medium","utm_campaign","utm_term","utm_content","fbclid","gclid","gclsrc","mc_cid","mc_eid","ref","ref_src","igshid"}
@@ -13,6 +14,7 @@ SUFFIX = re.compile(r"\s*[-|–—:]\s*[A-Z][A-Za-z0-9 .&'()]{2,40}$")
 PRIORITY = {
     "ddg": 10, "pypi": 10, "npm": 10, "crates": 10, "mdn": 10,
     "so": 9, "hn": 8, "gh": 8, "wiki": 8, "arxiv": 8, "openalex": 8,
+    "polymarket": 9, "techmeme": 8, "bluesky": 7, "stocktwits": 7,
     "pubmed": 8, "crossref": 7, "wikidata": 7, "reddit": 7,
     "lobsters": 7, "wayback": 7, "commoncrawl": 6, "news": 6, "code": 6, "yt": 6,
     "serper": 10, "brave": 10, "searxng": 10, "swarm": 9, "marginalia": 5
@@ -29,6 +31,9 @@ class Result:
     date: str = ""
     extra: str = ""        # extra signal (stars, score, tags...) shown inline
     score: float = 0.0     # merged relevance score (filled by merge)
+    upvotes: int = 0       # community upvotes / likes / score
+    comments: int = 0      # comment / discussion reply count
+    engagement_str: str = "" # formatted human-readable signal (e.g. '$1.2M vol · 84% Yes')
 
 
 def normalize_url(u: str) -> str:
@@ -103,8 +108,27 @@ def _recency_bonus(r: Result) -> float:
     return 0.0
 
 
+def _engagement_bonus(r: Result) -> float:
+    """Bonus for social and community engagement (upvotes, comments, volume)."""
+    up = r.upvotes or 0
+    cm = r.comments or 0
+    if not up and not cm and r.extra:
+        m_pts = re.search(r"(\d+)\s*(?:points|pts|upvotes|score|likes)", r.extra, re.I)
+        if m_pts:
+            up = int(m_pts.group(1))
+        m_cm = re.search(r"(\d+)\s*(?:comments|cmt|answers|replies)", r.extra, re.I)
+        if m_cm:
+            cm = int(m_cm.group(1))
+        if re.search(r"\$[0-9.,]+[kKmMbB]?\s*vol", r.extra, re.I):
+            return 2.5  # high-liquidity prediction market
+    total = up + cm * 2
+    if total <= 0:
+        return 0.0
+    return min(3.5, math.log10(total + 1) * 0.9)
+
+
 def merge(groups: list[list[Result]], n: int, order: list[str]) -> list[Result]:
-    """Score-driven merge: priority + rank + recency, with per-source diversity cap."""
+    """Score-driven merge: priority + rank + recency + engagement, with per-source diversity cap."""
     by_src: dict[str, list[Result]] = {}
     for g in groups:
         for r in g:
@@ -112,7 +136,7 @@ def merge(groups: list[list[Result]], n: int, order: list[str]) -> list[Result]:
     scored: list[Result] = []
     for src, lst in by_src.items():
         for r in lst:
-            r.score = PRIORITY.get(src, 5) - r.rank * 1.6 + _recency_bonus(r)
+            r.score = PRIORITY.get(src, 5) - r.rank * 1.6 + _recency_bonus(r) + _engagement_bonus(r)
             if not r.snippet and src not in ("code", "gh"):
                 r.score -= 2.0
             scored.append(r)

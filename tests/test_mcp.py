@@ -7,7 +7,7 @@ import pytest
 mcp = pytest.importorskip("infoseek.mcp", reason="mcp package not installed")
 
 EXPECTED_TOOLS = {
-    "search", "ask", "extract", "scan", "suggest", "status", "selfcheck", "run", "help",
+    "search", "ask", "last30days", "extract", "read_url", "scan", "suggest", "status", "selfcheck", "run", "help",
 }
 
 
@@ -46,13 +46,28 @@ def test_run_ask_routing_offline_invalid_query():
 
 
 def test_mcp_fuzzy_parameter_aliases():
-    out_url = asyncio.run(mcp.extract(Url="https://example.com/invalid"))
+    out_url = asyncio.run(mcp.extract(Url="not a url"))
     assert isinstance(out_url, str)
 
-    out_uri = asyncio.run(mcp.extract(uri="https://example.com/invalid"))
+    out_uri = asyncio.run(mcp.extract(uri="not a url"))
     assert isinstance(out_uri, str)
 
-    out_scan = asyncio.run(mcp.scan(text="test text", Url="https://example.com"))
+    out_read = asyncio.run(mcp.read_url(Url="not a url"))
+    assert isinstance(out_read, str)
+
+    out_scan = asyncio.run(mcp.scan(text="test text", Url="not a url"))
     data = json.loads(out_scan)
     assert data["level"] == "ok"
+
+
+def test_mcp_domain_search(monkeypatch):
+    async def fake_search(query, **kwargs):
+        assert kwargs.get("domain") == "github.com"
+        return [{"title": "FastAPI", "url": "https://github.com/tiangolo/fastapi", "snippet": "FastAPI framework"}]
+    monkeypatch.setattr(mcp.infoseek, "search", fake_search)
+    out = asyncio.run(mcp.search(Query="fastapi", domain="github.com", n=5))
+    assert isinstance(out, str)
+    data = json.loads(out)
+    assert len(data) == 1
+    assert data[0]["title"] == "FastAPI"
 

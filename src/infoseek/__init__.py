@@ -27,7 +27,7 @@ cache, polite rate limiting, robots.txt respected for direct page fetches.
 Built-in prompt-injection guard: ask() denies blocked sources, extract()
 replaces them with a denial note, search() drops blocked snippets."""
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 import asyncio, os, re
 from urllib.parse import urlparse
@@ -44,6 +44,7 @@ from .research import (smart_search, search_error, search_compat, changelog,
                        expand_queries, quality, normalize_error_message,
                        focus_snippet, auto_focus, looks_like_error,
                        looks_like_version_query)
+from .social import last30days
 from .selfcheck import selfcheck
 
 _clients: dict[tuple[float, bool], PoliteClient] = {}
@@ -122,11 +123,13 @@ def _screen_snippets(results: list) -> list:
     return out
 
 
-async def search(query: str, n: int = 6, engines: str = "auto", fresh: bool = False,
-                 min_interval: float = 1.0, freshness=None, expand: bool = False) -> list[dict]:
+async def search(query: str, n: int = 10, engines: str = "auto", fresh: bool = False,
+                 min_interval: float = 1.0, freshness=None, expand: bool = False,
+                 domain: str | None = None) -> list[dict]:
     """Run a multi-engine search. Returns deduped, merged result dicts
     (title, url, snippet, source, extra, date, rank).
 
+    domain: optional domain filter to restrict search (e.g. 'github.com', 'docs.python.org').
     freshness: limit recency — 'day'/'week'/'month'/'year', '7d', or days (int).
     expand=True: if the first round scores poorly (few results / low term
     overlap / no version numbers for version questions), automatically
@@ -135,6 +138,10 @@ async def search(query: str, n: int = 6, engines: str = "auto", fresh: bool = Fa
     if expand:
         return await smart_search(query, n=n, fresh=fresh)
     days = _freshness_days(freshness)
+    if domain:
+        dom_clean = domain.strip().lower()
+        if f"site:{dom_clean}" not in query.lower():
+            query = f"site:{dom_clean} {query.strip()}"
     engines_list, q = resolve_engines(query, engines)
     if not engines_list:
         return []
@@ -144,7 +151,23 @@ async def search(query: str, n: int = 6, engines: str = "auto", fresh: bool = Fa
     _last_errors.update(errors)
     results = _apply_freshness(_apply_site_filter(results, query), days)
     merged = merge([results], n, engines_list + [e for e in KEYLESS if e not in engines_list])
-    return to_dicts(_screen_snippets(merged))
+    res_dicts = to_dicts(_screen_snippets(merged))
+
+    # Automatic query relaxation fallback:
+    # If 0 results on a strictly quoted / boolean query, relax operators and retry once.
+    if not res_dicts and ('"' in q or "'" in q or " OR " in q or " AND " in q):
+        relaxed_q = re.sub(r'["\']', ' ', q)
+        relaxed_q = re.sub(r'\b(OR|AND)\b', ' ', relaxed_q)
+        relaxed_q = re.sub(r'\s+', ' ', relaxed_q).strip()
+        if relaxed_q and relaxed_q != q:
+            rel_results, _ = await run_engines(client, relaxed_q, n=max(n, 4), engines_list=engines_list,
+                                               fresh=True, freshness_days=days)
+            if rel_results:
+                rel_results = _apply_freshness(_apply_site_filter(rel_results, query), days)
+                merged = merge([rel_results], n, engines_list + [e for e in KEYLESS if e not in engines_list])
+                res_dicts = to_dicts(_screen_snippets(merged))
+
+    return res_dicts
 
 
 async def search_many(queries, n: int = 6, engines: str = "auto", fresh: bool = False,
@@ -203,7 +226,7 @@ async def ask(query: str, n: int = 5, extract_top: int = 2, budget: int = 2500,
     return bundle
 
 
-async def extract(url: str, max_chars: int = 2000, fresh: bool = False,
+async def extract(url: str, max_chars: int = 10000, fresh: bool = False,
                   respect_robots: bool = True, guard: bool = True) -> str:
     """Fetch one URL and return clean trimmed text (robots.txt respected by default).
 
@@ -261,6 +284,10 @@ async def run(query: str, n: int = 6, engines: str = "auto", fresh: bool = False
         return "(no query provided)"
     if q.lower().startswith("ask:"):
         return await ask(q[4:].strip(), n=max(3, n), budget=budget or 2500, fresh=fresh)
+    if re.match(r"^(?:last30days|last30|social|people):\s*", q, re.I):
+        return await last30days(q, budget=budget or 2500, fresh=fresh)
+    if re.match(r"^(?:last\s+(?:30\s+days|month)|what\s+(?:are\s+people\s+saying|do\s+people\s+think|are\s+users\s+saying)\s+about)\b", q, re.I):
+        return await last30days(q, budget=budget or 2500, fresh=fresh)
     if re.match(r"^https?://\S+$", q):
         return await extract(q, max_chars=budget * 4 if budget else 2000, fresh=fresh)
     if looks_like_error(q):
@@ -285,18 +312,21 @@ def help() -> str:
   await infoseek.run("rust vs go")          -> formatted search results
   await infoseek.run("https://...")         -> clean page text (archive fallback)
   await infoseek.run("ask: why is X fast")  -> LLM-ready context bundle
+  await infoseek.run("last30days: nvidia")  -> social listening & recency brief
   await infoseek.run("UnsupportedArchError: foo")  -> fixes-first error research
 
 Focused tools:
   await infoseek.search("q", n=6)           -> list of {title,url,snippet,source,...}
   await infoseek.ask("q", budget=2500)      -> context bundle string (format="json" for structured)
+  await infoseek.last30days("q", days=30)   -> research what people say (Reddit/HN/Polymarket)
   await infoseek.extract("https://...")     -> page text; blocked pages fall back to the
                                                Wayback Machine; [[denied: ...]] = injection blocked
   infoseek.scan(text)                       -> {ok|suspect|blocked} prompt-injection verdict (sync)
 
 Route to a source by prefix: hn: reddit: so: news: wiki: arxiv: gh: code: pypi:
-npm: crates: mdn: yt: wayback: commoncrawl: swarm: issues: prs: releases:
-changelog: error: compat:  |  site:<domain> auto-routes  |  engines="wide" = max coverage.
+npm: crates: mdn: yt: polymarket: techmeme: bluesky: stocktwits: wayback: commoncrawl:
+swarm: issues: prs: releases: changelog: error: compat:  |  site:<domain> auto-routes
+engines="wide" = max coverage.
 
 Diagnostics: await infoseek.status(); await infoseek.selfcheck()
 Rules: keep the guard on; pass budget= to ask(); cached calls are ~10 ms (fresh=True bypasses).
@@ -305,7 +335,7 @@ mix and then return an actionable hint telling you exactly what to try next."""
 
 
 __all__ = ["run", "help", "no_results_hint", "search", "search_many", "smart_search", "ask", "extract",
-           "suggest", "status", "selfcheck", "Result",
+           "suggest", "status", "selfcheck", "Result", "last30days",
            "search_error", "search_compat", "changelog",
            "expand_queries", "quality", "normalize_error_message",
            "focus_snippet", "auto_focus"]

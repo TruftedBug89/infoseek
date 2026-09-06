@@ -8,12 +8,57 @@ from .net import PoliteClient, UAS
 from .rank import Result, clean
 
 ENGINE_NAMES = [
-    "ddg", "marginalia", "hn", "lobsters", "so", "news", "wiki", "arxiv",
+    "bing", "ddg", "marginalia", "hn", "lobsters", "so", "news", "wiki", "arxiv",
     "openalex", "pubmed", "crossref", "wikidata", "gh", "code", "reddit",
     "pypi", "npm", "crates", "mdn", "yt", "wayback", "commoncrawl", "swarm",
     "gh_issues", "prs", "gh_releases", "changelog", "error", "compat",
+    "polymarket", "techmeme", "bluesky", "stocktwits",
     "brave", "serper", "searxng"
 ]
+
+def _decode_bing_url(href: str) -> str:
+    """Decode real destination URL from Bing click redirection links (u=a1<base64>)."""
+    if "u=a1" in href:
+        try:
+            import base64
+            part = href.split("u=a1")[1].split("&")[0]
+            pad = len(part) % 4
+            if pad:
+                part += "=" * (4 - pad)
+            decoded = base64.b64decode(part).decode("utf-8", "ignore")
+            if decoded.startswith("http"):
+                return decoded
+        except Exception:
+            pass
+    return href
+
+
+async def bing(c, q, n):
+    """Keyless Bing web search. Fast, unblocked general search with direct URL unquoting."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        r = await c.get("https://www.bing.com/search", params={"q": q, "count": max(n, 10)}, headers=headers, timeout=8)
+        if r.status_code != 200:
+            return [], f"bing http {r.status_code}"
+        soup = BeautifulSoup(r.text, "lxml")
+        out = []
+        for i, li in enumerate(soup.select("li.b_algo")[:n]):
+            h2 = li.select_one("h2 a")
+            p = li.select_one("p") or li.select_one(".b_caption p")
+            if h2:
+                href = _decode_bing_url(h2.get("href", ""))
+                title = h2.get_text(" ", strip=True)
+                snip = p.get_text(" ", strip=True) if p else ""
+                if href.startswith("http") and not href.startswith("https://www.bing.com"):
+                    out.append(Result(title=title, url=href, snippet=clean(snip), source="bing", rank=i))
+        return out, (None if out else "bing: no results parsed")
+    except Exception as exc:
+        return [], f"bing: {type(exc).__name__}: {str(exc)[:60]}"
+
 
 async def ddg(c, q, n):
     out = await _ddg_fetch(c, q, n)
@@ -38,7 +83,36 @@ def _ddg_df(days: float) -> str:
 _FRESH_Q = {
     "news": lambda q, d: f"{q} when:{max(1, int(d))}d",
     "ddg": lambda q, d: f"{q} __df__{_ddg_df(d)}",
+    "bing": lambda q, d: q,
 }
+
+
+async def _ddg_lite_fetch(c, q, n):
+    """Fallback DuckDuckGo Lite fetch with mobile headers (bypasses JS challenges)."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    try:
+        r = await c.post("https://lite.duckduckgo.com/lite/", data={"q": q}, headers=headers, timeout=8)
+        if r.status_code != 200:
+            return []
+        soup = BeautifulSoup(r.text, "lxml")
+        out = []
+        links = soup.select("a.result-link")
+        snippets = soup.select("td.result-snippet")
+        for i, a in enumerate(links[:n]):
+            title = a.get_text(" ", strip=True)
+            href = a.get("href", "")
+            if "uddg=" in href:
+                href = unquote(parse_qs(urlparse(href).query).get("uddg", [""])[0])
+            if not href.startswith("http") or "duckduckgo.com" in href:
+                continue
+            sn = snippets[i].get_text(" ", strip=True) if i < len(snippets) else ""
+            out.append(Result(title=title, url=href, snippet=clean(sn) if sn else "", source="ddg", rank=i))
+        return out
+    except Exception:
+        return []
 
 
 async def _ddg_fetch(c, q, n):
@@ -50,28 +124,30 @@ async def _ddg_fetch(c, q, n):
     data = {"q": q}
     if df:
         data["df"] = df
-    r = await c.post("https://html.duckduckgo.com/html/", data=data)
-    if r.status_code != 200:
-        return []
-    soup = BeautifulSoup(r.text, "lxml")
-    if not soup.select_one(".result") and ("anomaly" in r.text.lower() or "challenge" in r.text.lower()):
-        return []
-    out = []
-    for i, x in enumerate(soup.select(".result")[:n]):
-        if "result--ad" in (x.get("class") or []):
-            continue
-        a = x.select_one(".result__a")
-        if not a:
-            continue
-        href = a.get("href", "")
-        if "uddg=" in href:
-            href = unquote(parse_qs(urlparse(href).query).get("uddg", [""])[0])
-        if "duckduckgo.com/y.js" in href or "ad_domain=" in href or "ad_provider=" in href:
-            continue  # sponsored result
-        sn = x.select_one(".result__snippet")
-        out.append(Result(title=a.get_text(" ", strip=True), url=href,
-                          snippet=clean(sn.get_text(" ", strip=True)) if sn else "", source="ddg", rank=i))
-    return out
+    try:
+        r = await c.post("https://html.duckduckgo.com/html/", data=data)
+        if r.status_code == 200 and ("anomaly" not in r.text.lower() and "challenge" not in r.text.lower()):
+            soup = BeautifulSoup(r.text, "lxml")
+            out = []
+            for i, x in enumerate(soup.select(".result")[:n]):
+                if "result--ad" in (x.get("class") or []):
+                    continue
+                a = x.select_one(".result__a")
+                if not a:
+                    continue
+                href = a.get("href", "")
+                if "uddg=" in href:
+                    href = unquote(parse_qs(urlparse(href).query).get("uddg", [""])[0])
+                if "duckduckgo.com/y.js" in href or "ad_domain=" in href or "ad_provider=" in href:
+                    continue  # sponsored result
+                sn = x.select_one(".result__snippet")
+                out.append(Result(title=a.get_text(" ", strip=True), url=href,
+                                  snippet=clean(sn.get_text(" ", strip=True)) if sn else "", source="ddg", rank=i))
+            if out:
+                return out
+    except Exception:
+        pass
+    return await _ddg_lite_fetch(c, q, n)
 
 async def marginalia(c, q, n):
     r = await c.get("https://old-search.marginalia.nu/search", params={"query": q})
@@ -243,12 +319,67 @@ async def code(c, q, n):
                           source="code", rank=i, snippet=clean(content, 150), extra=repo))
     return out, (None if out else "grep.app: no hits")
 
+_REDDIT_ATOM = "{http://www.w3.org/2005/Atom}"
+_CASHTAG_RE = re.compile(r"\$([A-Za-z]{1,6}(?:\.[A-Za-z])?)\b")
+
 async def reddit(c, q, n):
-    """old.reddit HTML search (server-rendered, keyless). Falls back to pullpush.io,
-    then to DuckDuckGo site-restricted search (reddit walls most direct endpoints
-    from datacenter IPs; DDG site: search stays reliable)."""
+    """Reddit keyless search. Uses public Atom RSS feeds (bypasses bot blocks,
+    real author & subreddit metadata). Falls back to old.reddit HTML, pullpush.io,
+    and finally DuckDuckGo site-restricted search."""
+    import xml.etree.ElementTree as ET
+
+    # Primary keyless path: Reddit Atom RSS feed
     try:
-        r = await c.get("https://old.reddit.com/search", params={"q": q, "sort": "relevance"})
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+        r = await c.get("https://www.reddit.com/search.rss",
+                        params={"q": q, "sort": "relevance"},
+                        headers={"User-Agent": ua}, timeout=12)
+        if r.status_code == 200 and "<feed" in r.text:
+            root = ET.fromstring(r.text)
+            out = []
+            for i, entry in enumerate(root.iter(f"{_REDDIT_ATOM}entry")):
+                if len(out) >= n:
+                    break
+                link_el = entry.find(f"{_REDDIT_ATOM}link")
+                url = link_el.get("href", "").strip() if link_el is not None else ""
+                title_el = entry.find(f"{_REDDIT_ATOM}title")
+                title = title_el.text.strip() if title_el is not None and title_el.text else ""
+                if not url or not title:
+                    continue
+                # Subreddit & author
+                cat_el = entry.find(f"{_REDDIT_ATOM}category")
+                sub = cat_el.get("term", "").strip() if cat_el is not None else ""
+                author_el = entry.find(f"{_REDDIT_ATOM}author")
+                author = ""
+                if author_el is not None:
+                    name_el = author_el.find(f"{_REDDIT_ATOM}name")
+                    if name_el is not None and name_el.text:
+                        author = name_el.text.strip()
+                # Updated date
+                upd_el = entry.find(f"{_REDDIT_ATOM}updated")
+                d = (upd_el.text.strip()[:10] if upd_el is not None and upd_el.text else "")
+                # Snippet from content html
+                content_el = entry.find(f"{_REDDIT_ATOM}content")
+                snip = ""
+                if content_el is not None and content_el.text:
+                    snip = clean(BeautifulSoup(content_el.text, "lxml").get_text(" ", strip=True), 150)
+                sub_fmt = f"r/{sub}" if sub else "reddit"
+                author_fmt = f"by {author}" if author else ""
+                extra = f"{sub_fmt}, {author_fmt}".strip(", ")
+                out.append(Result(
+                    title=title, url=url, source="reddit", rank=i,
+                    extra=extra, date=d, snippet=snip,
+                    upvotes=20,
+                    engagement_str=sub_fmt
+                ))
+            if out:
+                return out, None
+    except Exception:
+        pass
+
+    # Secondary path: old.reddit HTML
+    try:
+        r = await c.get("https://old.reddit.com/search", params={"q": q, "sort": "relevance"}, timeout=10)
         if r.status_code == 200:
             soup = BeautifulSoup(r.text, "lxml")
             out = []
@@ -266,24 +397,32 @@ async def reddit(c, q, n):
                 snip = md.get_text(" ", strip=True) if md else ""
                 out.append(Result(title=a.get_text(" ", strip=True), url=url, source="reddit", rank=i,
                                   extra=meta.get_text(" ", strip=True) if meta else "",
-                                  snippet=clean(snip, 150)))
+                                  snippet=clean(snip, 150), upvotes=15))
             if out:
                 return out, None
+    except Exception:
+        pass
+
+    # Tertiary path: pullpush.io
+    try:
         pp = await c.get("https://api.pullpush.io/reddit/search/submission/",
-                         params={"q": q, "size": n}, retries=0)
+                         params={"q": q, "size": n}, retries=0, timeout=10)
         if pp.status_code == 200:
             rows = (pp.json().get("data") or [])[:n]
             out = [Result(title=x.get("title", ""),
                           url=f"https://www.reddit.com{x.get('permalink','')}",
                           source="reddit", rank=i,
                           extra=f"r/{x.get('subreddit','')}, score {x.get('score',0)}, {x.get('num_comments',0)} comments, by {x.get('author','')}",
-                          snippet=clean((x.get('selftext') or '').strip(), 150))
+                          date=(x.get("created_utc") and datetime.fromtimestamp(x["created_utc"], tz=timezone.utc).strftime("%Y-%m-%d")) or "",
+                          snippet=clean((x.get('selftext') or '').strip(), 150),
+                          upvotes=x.get("score", 0), comments=x.get("num_comments", 0))
                    for i, x in enumerate(rows) if x.get("title")]
             if out:
                 return out, None
     except Exception:
         pass
-    # last resort: DuckDuckGo site-restricted search, re-tagged as reddit
+
+    # Last resort: DuckDuckGo site-restricted search, re-tagged as reddit
     try:
         out, err = await ddg(c, f"site:reddit.com {q}", n)
         if out:
@@ -293,6 +432,245 @@ async def reddit(c, q, n):
         return [], err or "reddit: no path returned results (origin walled, pullpush empty)"
     except Exception as e:
         return [], f"reddit: {type(e).__name__}: {str(e)[:80]}"
+
+
+async def polymarket(c, q, n):
+    """Polymarket prediction market search via Gamma API (free, keyless).
+    Returns markets, probabilities (odds), and trading volume in USD.
+    Falls back to DuckDuckGo site:polymarket.com if Gamma API is unreachable."""
+    try:
+        url = "https://gamma-api.polymarket.com/public-search"
+        r = await c.get(url, params={"q": q}, timeout=10)
+        if r.status_code == 200:
+            data = r.json() or {}
+            events = data.get("events") or []
+            out = []
+            for i, ev in enumerate(events[:n]):
+                title = ev.get("title") or ev.get("question") or ""
+                slug = ev.get("slug") or ""
+                ev_url = f"https://polymarket.com/event/{slug}" if slug else "https://polymarket.com"
+                vol = float(ev.get("volume") or ev.get("volume24hr") or 0)
+                vol_fmt = f"${vol/1_000_000:.1f}M" if vol >= 1_000_000 else f"${vol/1_000:.1f}K" if vol >= 1_000 else f"${vol:.0f}"
+
+                markets = ev.get("markets") or []
+                odds_strs = []
+                for mkt in markets[:3]:
+                    try:
+                        outcomes = json.loads(mkt.get("outcomes", "[]")) if isinstance(mkt.get("outcomes"), str) else (mkt.get("outcomes") or [])
+                        prices = json.loads(mkt.get("outcomePrices", "[]")) if isinstance(mkt.get("outcomePrices"), str) else (mkt.get("outcomePrices") or [])
+                        if outcomes and prices:
+                            for oc, pr in zip(outcomes, prices):
+                                try:
+                                    pct = round(float(pr) * 100)
+                                    odds_strs.append(f"{oc}: {pct}%")
+                                except (ValueError, TypeError):
+                                    pass
+                    except Exception:
+                        pass
+                odds_summary = " · ".join(odds_strs[:4]) if odds_strs else "Prediction market"
+                snippet = f"{odds_summary} · Volume: {vol_fmt}"
+                end_date = (ev.get("endDate") or "")[:10]
+
+                out.append(Result(
+                    title=title,
+                    url=ev_url,
+                    source="polymarket",
+                    rank=i,
+                    snippet=clean(snippet, 160),
+                    date=end_date,
+                    extra=f"odds: {odds_summary} · {vol_fmt} vol",
+                    upvotes=int(min(vol / 100, 10000)),
+                    comments=len(markets),
+                    engagement_str=f"{vol_fmt} vol · {odds_summary}"
+                ))
+            if out:
+                return out, None
+    except Exception:
+        pass
+
+    # Fallback to site:polymarket.com via ddg
+    try:
+        out, err = await ddg(c, f"site:polymarket.com {q}", n)
+        if out:
+            for r in out:
+                r.source = "polymarket"
+                r.extra = (r.extra + " · " if r.extra else "") + "Polymarket"
+            return out, None
+        return [], err or "polymarket: no prediction markets found"
+    except Exception as e:
+        return [], f"polymarket: {type(e).__name__}: {str(e)[:80]}"
+
+
+async def techmeme(c, q, n):
+    """Techmeme tech-news and discussion feed (keyless).
+    Filters the curated high-signal tech headlines and discussion clusters."""
+    try:
+        r = await c.get("https://www.techmeme.com/feed.xml", timeout=12)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, "lxml-xml")
+            items = soup.find_all("item")
+            tokens = [t.lower() for t in re.split(r"\W+", q) if len(t) > 2]
+            scored = []
+            for i, it in enumerate(items):
+                title = it.find("title").get_text(" ", strip=True) if it.find("title") else ""
+                link = it.find("link").get_text(strip=True) if it.find("link") else ""
+                desc = it.find("description").get_text(" ", strip=True) if it.find("description") else ""
+                pub_date = (it.find("pubDate").get_text(strip=True) if it.find("pubDate") else "")[:16]
+
+                t_lower = (title + " " + desc).lower()
+                matches = sum(1 for t in tokens if t in t_lower) if tokens else 1
+                if tokens and matches == 0:
+                    continue
+                scored.append((matches, i, title, link, desc, pub_date))
+
+            scored.sort(key=lambda x: (-x[0], x[1]))
+            out = []
+            for rank, (_, _, title, link, desc, pub_date) in enumerate(scored[:n]):
+                desc_clean = BeautifulSoup(desc, "lxml").get_text(" ", strip=True)
+                out.append(Result(
+                    title=title,
+                    url=link,
+                    source="techmeme",
+                    rank=rank,
+                    snippet=clean(desc_clean or title, 160),
+                    date=pub_date,
+                    extra="Techmeme curated",
+                    upvotes=50,
+                    engagement_str="Techmeme curated"
+                ))
+            if out:
+                return out, None
+    except Exception:
+        pass
+
+    # Fallback to site:techmeme.com search
+    try:
+        out, err = await ddg(c, f"site:techmeme.com {q}", n)
+        if out:
+            for r in out:
+                r.source = "techmeme"
+                r.extra = (r.extra + " · " if r.extra else "") + "Techmeme"
+            return out, None
+        return [], err or "techmeme: no items found"
+    except Exception as e:
+        return [], f"techmeme: {type(e).__name__}: {str(e)[:80]}"
+
+
+async def bluesky(c, q, n):
+    """Bluesky / AT Protocol public post search (keyless).
+    Searches decentralized public social discourse via api.bsky.app."""
+    try:
+        r = await c.get(
+            "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts",
+            params={"q": q, "limit": min(n * 2, 25)},
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json() or {}
+            posts = data.get("posts") or []
+            out = []
+            for i, p in enumerate(posts[:n]):
+                record = p.get("record") or {}
+                text = record.get("text") or ""
+                author = p.get("author") or {}
+                handle = author.get("handle") or "unknown"
+                uri = p.get("uri") or ""
+                rkey = uri.split("/")[-1] if "/" in uri else ""
+                post_url = f"https://bsky.app/profile/{handle}/post/{rkey}" if rkey else f"https://bsky.app/profile/{handle}"
+
+                likes = p.get("likeCount") or 0
+                reposts = p.get("repostCount") or 0
+                replies = p.get("replyCount") or 0
+                created_at = (record.get("createdAt") or "")[:10]
+
+                out.append(Result(
+                    title=f"@{handle}: {text[:70]}…",
+                    url=post_url,
+                    source="bluesky",
+                    rank=i,
+                    snippet=clean(text, 160),
+                    date=created_at,
+                    extra=f"@{handle} · {likes} likes, {reposts} reposts",
+                    upvotes=likes + reposts,
+                    comments=replies,
+                    engagement_str=f"{likes} likes · {reposts} reposts"
+                ))
+            if out:
+                return out, None
+    except Exception:
+        pass
+
+    # Fallback to site:bsky.app
+    try:
+        out, err = await ddg(c, f"site:bsky.app {q}", n)
+        if out:
+            for r in out:
+                r.source = "bluesky"
+                r.extra = (r.extra + " · " if r.extra else "") + "Bluesky"
+            return out, None
+        return [], err or "bluesky: no posts found"
+    except Exception as e:
+        return [], f"bluesky: {type(e).__name__}: {str(e)[:80]}"
+
+
+async def stocktwits(c, q, n):
+    """StockTwits trader sentiment and stream (keyless).
+    Searches retail financial discussion, bullish/bearish ratios, and volume."""
+    symbol = None
+    m = _CASHTAG_RE.search(q)
+    if m:
+        symbol = m.group(1).upper()
+    else:
+        words = q.strip().split()
+        if len(words) == 1 and len(words[0]) <= 5 and words[0].isalpha():
+            symbol = words[0].upper()
+
+    if symbol:
+        try:
+            url = f"https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json"
+            r = await c.get(url, timeout=10)
+            if r.status_code == 200:
+                data = r.json() or {}
+                messages = data.get("messages") or []
+                bull_count = sum(1 for msg in messages if (msg.get("entities") or {}).get("sentiment", {}).get("basic") == "Bullish")
+                bear_count = sum(1 for msg in messages if (msg.get("entities") or {}).get("sentiment", {}).get("basic") == "Bearish")
+                ratio_str = f"Bullish: {bull_count}, Bearish: {bear_count}" if (bull_count + bear_count) > 0 else "Active discussion"
+
+                out = []
+                for i, msg in enumerate(messages[:n]):
+                    body = msg.get("body") or ""
+                    user = (msg.get("user") or {}).get("username") or "trader"
+                    msg_id = msg.get("id") or ""
+                    date = (msg.get("created_at") or "")[:10]
+                    likes = (msg.get("likes") or {}).get("total") or 0
+                    msg_url = f"https://stocktwits.com/{user}/message/{msg_id}" if msg_id else f"https://stocktwits.com/symbol/{symbol}"
+                    out.append(Result(
+                        title=f"${symbol} ({user}): {body[:60]}…",
+                        url=msg_url,
+                        source="stocktwits",
+                        rank=i,
+                        snippet=clean(body, 160),
+                        date=date,
+                        extra=f"${symbol} · {ratio_str}",
+                        upvotes=likes,
+                        engagement_str=ratio_str
+                    ))
+                if out:
+                    return out, None
+        except Exception:
+            pass
+
+    # Fallback to site:stocktwits.com
+    try:
+        out, err = await ddg(c, f"site:stocktwits.com {q}", n)
+        if out:
+            for r in out:
+                r.source = "stocktwits"
+                r.extra = (r.extra + " · " if r.extra else "") + "StockTwits"
+            return out, None
+        return [], err or "stocktwits: no messages found"
+    except Exception as e:
+        return [], f"stocktwits: {type(e).__name__}: {str(e)[:80]}"
 
 async def brave(c, q, n):
     key = os.environ.get("BRAVE_API_KEY")
@@ -908,13 +1286,14 @@ async def swarm(c, q, n):
 
 
 REGISTRY = {
-    "ddg": ddg, "marginalia": marginalia, "hn": hn, "lobsters": lobsters, "so": so,
+    "bing": bing, "ddg": ddg, "marginalia": marginalia, "hn": hn, "lobsters": lobsters, "so": so,
     "news": news, "wiki": wiki, "arxiv": arxiv, "openalex": openalex,
     "pubmed": pubmed, "crossref": crossref, "wikidata": wikidata, "gh": gh, "code": code,
     "reddit": reddit, "pypi": pypi, "npm": npm, "crates": crates, "mdn": mdn, "yt": yt,
     "wayback": wayback, "commoncrawl": commoncrawl, "swarm": swarm,
     "gh_issues": gh_issues, "prs": prs, "gh_releases": gh_releases, "changelog": changelog,
     "error": error, "compat": compat,
+    "polymarket": polymarket, "techmeme": techmeme, "bluesky": bluesky, "stocktwits": stocktwits,
     "brave": brave, "serper": serper, "searxng": searxng,
 }
 
@@ -926,11 +1305,16 @@ SITE_MAP = {
     "web.archive.org": "wayback", "archive.org": "wayback",
     "pypi.org": "pypi", "npmjs.com": "npm", "registry.npmjs.org": "npm",
     "crates.io": "crates", "developer.mozilla.org": "mdn",
-    "youtube.com": "yt", "youtu.be": "yt"
+    "youtube.com": "yt", "youtu.be": "yt",
+    "polymarket.com": "polymarket", "techmeme.com": "techmeme",
+    "bsky.app": "bluesky", "stocktwits.com": "stocktwits"
 }
 
 _ALIAS = {
     "doi": "crossref", "s2": "openalex", "pm": "pubmed", "wd": "wikidata",
+    "poly": "polymarket", "prediction": "polymarket", "market": "polymarket",
+    "tm": "techmeme", "bsky": "bluesky", "atproto": "bluesky",
+    "st": "stocktwits", "stocks": "stocktwits", "ticker": "stocktwits",
     "wb": "wayback", "archive": "wayback", "cc": "commoncrawl",
     "docs": "mdn", "cargo": "crates", "rust": "crates", "node": "npm",
     "python": "pypi", "pip": "pypi", "youtube": "yt",
@@ -942,10 +1326,11 @@ _ALIAS = {
 }
 
 KEYLESS = {
-    "ddg", "marginalia", "hn", "lobsters", "so", "news", "wiki", "arxiv",
+    "bing", "ddg", "marginalia", "hn", "lobsters", "so", "news", "wiki", "arxiv",
     "openalex", "pubmed", "crossref", "wikidata", "gh", "code", "reddit",
     "pypi", "npm", "crates", "mdn", "yt", "wayback", "commoncrawl", "swarm",
-    "gh_issues", "prs", "gh_releases", "changelog", "error", "compat"
+    "gh_issues", "prs", "gh_releases", "changelog", "error", "compat",
+    "polymarket", "techmeme", "bluesky", "stocktwits"
 }
 
 
@@ -959,7 +1344,7 @@ def available() -> list[str]:
 
 
 #: Maximum-coverage mix: general web + SearXNG swarm + forums + news.
-WIDE_MIX = ["ddg", "swarm", "hn", "so", "news"]
+WIDE_MIX = ["bing", "ddg", "swarm", "hn", "so", "news"]
 
 
 def resolve_engines(query: str, explicit: str | None) -> tuple[list[str], str]:
@@ -979,10 +1364,13 @@ def resolve_engines(query: str, explicit: str | None) -> tuple[list[str], str]:
         return [_ALIAS[m.group(1)]], m.group(2).strip()
     for dom, eng in SITE_MAP.items():
         if re.search(rf"site:\s*{re.escape(dom)}\b", query):
-            return [eng], re.sub(rf"site:\s*{re.escape(dom)}\b", "", query).strip()
+            cleaned = re.sub(rf"site:\s*{re.escape(dom)}\b", "", query).strip()
+            if dom == "github.com":
+                return ["gh", "code", "bing"], (cleaned or query)
+            return [eng], cleaned
     if re.search(r"site:\s*news\.google\.com", query):
         return ["news"], query
-    return ["ddg", "hn", "so", "reddit", "news"], query
+    return ["bing", "ddg", "hn", "so", "reddit", "news"], query
 
 
 async def run_engines(client: PoliteClient, query: str, n: int, engines_list: list[str],
@@ -994,7 +1382,7 @@ async def run_engines(client: PoliteClient, query: str, n: int, engines_list: li
     results: list[Result] = []
     errors: dict[str, str] = {}
 
-    FETCH = max(min(n, 12), 4)
+    FETCH = max(min(n, 20), 4)
 
     async def one(name: str):
         q_use = _FRESH_Q[name](query, freshness_days) if (freshness_days and name in _FRESH_Q) else query
@@ -1005,7 +1393,7 @@ async def run_engines(client: PoliteClient, query: str, n: int, engines_list: li
             except Exception:
                 rows = None
             if rows == "__err__":
-                return name, [], "cached (recent failure, retry in ~90s)"
+                return name, [], "cached (recent failure, retry shortly)"
             if isinstance(rows, list):
                 return name, [Result(**row) for row in rows][:n], None
         try:
@@ -1016,14 +1404,14 @@ async def run_engines(client: PoliteClient, query: str, n: int, engines_list: li
             try:
                 if res:
                     _cache.set("eng", q_use, name,
-                               value=_json.dumps([r.__dict__ for r in res[:12]], default=str), ttl=ttl)
-                else:
-                    _cache.set("eng", q_use, name, value='"__err__"', ttl=90)
+                               value=_json.dumps([r.__dict__ for r in res[:20]], default=str), ttl=ttl)
+                elif err and any(term in str(err).lower() for term in ("rate", "timeout", "503", "429", "busy")):
+                    _cache.set("eng", q_use, name, value='"__err__"', ttl=20)
             except Exception:
                 pass
         return name, res[:n], err
 
-    engine_timeout = float(os.environ.get("INFOSEEK_ENGINE_TIMEOUT", "3.5"))
+    engine_timeout = float(os.environ.get("INFOSEEK_ENGINE_TIMEOUT", "5.0"))
 
     async def one_timed(nm: str):
         try:
