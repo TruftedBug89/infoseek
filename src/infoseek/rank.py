@@ -7,7 +7,7 @@ import re
 
 TRACKING = {"utm_source","utm_medium","utm_campaign","utm_term","utm_content","fbclid","gclid","gclsrc","mc_cid","mc_eid","ref","ref_src","igshid"}
 CTA = re.compile(r"\b(?:discover|learn more|read more|click here|sign up|subscribe|get started|see more|view all|read the full|keep reading)\b", re.I)
-SUFFIX = re.compile(r"\s*[-|–—:]\s*[A-Z][A-Za-z0-9 .&'()]{2,40}$")
+SUFFIX = re.compile(r"\s*[-|– - :]\s*[A-Z][A-Za-z0-9 .&'()]{2,40}$")
 
 # Source priority (higher = more trust at same rank). Tuned: general web + expert Q&A
 # first, forums/news after.
@@ -37,75 +37,75 @@ class Result:
 
 
 def normalize_url(u: str) -> str:
-    try:
-        p = urlparse(u)
-        host = p.netloc.lower()
-        for prefix in ("www.", "m."):
-            if host.startswith(prefix) and host[len(prefix):].count(".") >= 1:
-                host = host[len(prefix):]
-                break
-        q = [(k, v) for k, v in parse_qsl(p.query) if k.lower() not in TRACKING]
-        path = p.path.rstrip("/") or "/"
-        return urlunparse((p.scheme, host, path, "", urlencode(q), ""))
-    except Exception:
-        return u
+ try:
+ p = urlparse(u)
+ host = p.netloc.lower()
+ for prefix in ("www.", "m."):
+ if host.startswith(prefix) and host[len(prefix):].count(".") >= 1:
+ host = host[len(prefix):]
+ break
+ q = [(k, v) for k, v in parse_qsl(p.query) if k.lower() not in TRACKING]
+ path = p.path.rstrip("/") or "/"
+ return urlunparse((p.scheme, host, path, "", urlencode(q), ""))
+ except Exception:
+ return u
 
 
 def clean_title(t: str) -> str:
-    """Drop suffix boilerplate like ' - SiteName' / '| SiteName' for near-dup detection."""
-    t = " ".join(t.split()).lower()
-    t = SUFFIX.sub("", t)
-    return t[:80]
+ """Drop suffix boilerplate like ' - SiteName' / '| SiteName' for near-dup detection."""
+ t = " ".join(t.split()).lower()
+ t = SUFFIX.sub("", t)
+ return t[:80]
 
 
 def clean(s: str, limit: int = 160) -> str:
-    s = " ".join(s.split())
-    # cut CTA boilerplate at the trail
-    m = CTA.search(s, 30)
-    if m:
-        s = s[:m.start()].rstrip(" .,;:-–—|")
-    if len(s) <= limit:
-        return s
-    cut = s[:limit]
-    i = cut.rfind(" ")
-    return (cut[:i] + " …") if i > 40 else cut + " …"
+ s = " ".join(s.split())
+ # cut CTA boilerplate at the trail
+ m = CTA.search(s, 30)
+ if m:
+ s = s[:m.start()].rstrip(" .,;:-– - |")
+ if len(s) <= limit:
+ return s
+ cut = s[:limit]
+ i = cut.rfind(" ")
+ return (cut[:i] + " …") if i > 40 else cut + " …"
 
 
 def dedupe(results: list[Result]) -> list[Result]:
-    out: list[Result] = []
-    seen_url: set[str] = set()
-    by_host: dict[str, list[str]] = {}
-    for r in results:
-        nu = normalize_url(r.url)
-        if nu in seen_url:
-            continue
-        host = urlparse(nu).netloc
-        ct = clean_title(r.title)
-        if any(SequenceMatcher(None, ct, t).ratio() > 0.86 for t in by_host.get(host, [])):
-            continue
-        seen_url.add(nu)
-        by_host.setdefault(host, []).append(ct)
-        out.append(r)
-    return out
+ out: list[Result] = []
+ seen_url: set[str] = set()
+ by_host: dict[str, list[str]] = {}
+ for r in results:
+ nu = normalize_url(r.url)
+ if nu in seen_url:
+ continue
+ host = urlparse(nu).netloc
+ ct = clean_title(r.title)
+ if any(SequenceMatcher(None, ct, t).ratio() > 0.86 for t in by_host.get(host, [])):
+ continue
+ seen_url.add(nu)
+ by_host.setdefault(host, []).append(ct)
+ out.append(r)
+ return out
 
 
 def _recency_bonus(r: Result) -> float:
-    m = re.search(r"(20\d{2})-(\d{2})-(\d{2})", r.date or "")
-    if not m:
-        return 0.0
-    from datetime import date
-    try:
-        d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        age = (date.today() - d).days
-    except ValueError:
-        return 0.0
-    if age < 7:
-        return 3.0
-    if age < 30:
-        return 1.5
-    if age < 180:
-        return 0.5
-    return 0.0
+ m = re.search(r"(20\d{2})-(\d{2})-(\d{2})", r.date or "")
+ if not m:
+ return 0.0
+ from datetime import date
+ try:
+ d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+ age = (date.today() - d).days
+ except ValueError:
+ return 0.0
+ if age < 7:
+ return 3.0
+ if age < 30:
+ return 1.5
+ if age < 180:
+ return 0.5
+ return 0.0
 
 
 def _engagement_bonus(r: Result) -> float:
@@ -155,4 +155,4 @@ def merge(groups: list[list[Result]], n: int, order: list[str]) -> list[Result]:
 
 
 def to_dicts(results: list[Result]) -> list[dict]:
-    return [asdict(r) for r in results]
+ return [asdict(r) for r in results]

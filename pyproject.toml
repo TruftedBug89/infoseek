@@ -2,6 +2,7 @@
 name = "infoseek"
 version = "0.9.0"
 description = "Keyless multi-engine web research: search, ask, extract, suggest"
+>>>>>>> 2bc88f6d9c02e9c51e25d694a93e68c2a2e6dfe9
 requires-python = ">=3.10"
 dependencies = ["httpx", "beautifulsoup4", "lxml", "trafilatura"]
 
@@ -22,6 +23,10 @@ build-backend = "hatchling.build"
 packages = ["src/infoseek"]
 
 [tool.pytest.ini_options]
+<<<<<<< HEAD
+markers = ["live: hits the network (engines, extraction) - deselect with -m 'not live'"]
+=======
 markers = [
-    "live: tests that make live outbound network calls",
+ "live: tests that make live outbound network calls",
 ]
+>>>>>>> 2bc88f6d9c02e9c51e25d694a93e68c2a2e6dfe9

@@ -1,29 +1,49 @@
-"""infoseek — Tavily-style web research for AI agents. No API keys.
+"""infoseek - Tavily-style web research for AI agents. No API keys.
 
-Core API — four primitives (all async except scan):
-    await infoseek.search(query, n=6)            -> list[dict] of results
-    await infoseek.ask(query, budget=2500)       -> LLM-ready context bundle
-    await infoseek.extract(url, max_chars=2000)  -> clean page text
-    infoseek.scan(text)                          -> prompt-injection verdict (sync)
+Core API - four primitives (all async except scan):
+ await infoseek.search(query, n=6) -> list[dict] of results
+ await infoseek.ask(query, budget=2500) -> LLM-ready context bundle
+ await infoseek.extract(url, max_chars=2000) -> clean page text
+ infoseek.scan(text) -> prompt-injection verdict (sync)
 
 Plus: search_many(), smart_search(), suggest(), status(), selfcheck(), and the
 research helpers search_error() / search_compat() / changelog().
 
-26 keyless engines (20 direct sources — DuckDuckGo, Hacker News, Stack
+26 keyless engines (20 direct sources - DuckDuckGo, Hacker News, Stack
 Overflow, Reddit, Google News, Wikipedia, Wikidata, arXiv, OpenAlex, PubMed,
 Crossref, GitHub, grep.app, lobste.rs, Marginalia, PyPI, npm, crates.io, MDN,
-YouTube — plus 6 research modes: gh_issues, prs, gh_releases, changelog,
+YouTube - plus 6 research modes: gh_issues, prs, gh_releases, changelog,
 error, compat). Optional keyed upgrades (Brave, Serper, your own SearXNG)
 activate automatically from env vars.
 
+<<<<<<< HEAD
+Simple API (sync - for agents and small models, no asyncio needed):
+ infoseek.find("query") -> str search: ranked results with urls
+ infoseek.research("question")-> str search + read: context to answer from
+ infoseek.read("https://url") -> str one page: clean text
+ infoseek.deep("topic") -> str multi-angle research brief
+ infoseek.help() -> str usage card
+
+Async API (structured data / full control):
+ infoseek.scan(text, url='') -> Verdict # prompt-injection guard (sync, cached)
+ await infoseek.search(query, n=6, engines="auto", fresh=False) -> list[dict]
+ await infoseek.ask(query, n=5, extract_top=2, budget=2500, fresh=False) -> str
+ await infoseek.extract(url, max_chars=2000, fresh=False) -> str
+ await infoseek.suggest(query) -> str
+ await infoseek.status() -> str
+=======
 Query routing: prefix the query to pick a source (hn:, so:, news:, wiki:,
 arxiv:, gh:, code:, reddit:, pypi:, npm:, crates:, mdn:, error:, compat:,
 issues:, prs:, releases:, changelog:, ...); site:<domain> auto-routes.
+>>>>>>> 2bc88f6d9c02e9c51e25d694a93e68c2a2e6dfe9
 
 Token-efficient by design: compact ASCII snippets, near-dup dedupe,
 quality-scored merge with recency boost, relevance-sentence extraction, disk
 cache, polite rate limiting, robots.txt respected for direct page fetches.
 
+<<<<<<< HEAD
+__version__ = "0.4.0"
+=======
 Built-in prompt-injection guard: ask() denies blocked sources, extract()
 replaces them with a denial note, search() drops blocked snippets."""
 
@@ -39,6 +59,10 @@ from . import guard
 from .guard import scan
 from .format import fmt_bundle, fmt_search, fmt_status, no_results_hint
 from .net import PoliteClient
+<<<<<<< HEAD
+from .simple import find, research, read, deep, help # sync one-liners for agents
+from .rank import Result, clean, dedupe, merge, normalize_url, to_dicts
+=======
 from .rank import Result, merge, to_dicts
 from .research import (smart_search, search_error, search_compat, changelog,
                        expand_queries, quality, normalize_error_message,
@@ -46,81 +70,82 @@ from .research import (smart_search, search_error, search_compat, changelog,
                        looks_like_version_query)
 from .social import last30days
 from .selfcheck import selfcheck
+>>>>>>> 2bc88f6d9c02e9c51e25d694a93e68c2a2e6dfe9
 
 _clients: dict[tuple[float, bool], PoliteClient] = {}
 _last_errors: dict = {}
 
 
 def _get_client(min_interval: float = 1.0, respect_robots: bool = True) -> PoliteClient:
-    """Shared clients, keyed by (interval, robots) so per-call settings are honored."""
-    iv = float(os.environ.get("INFOSEEK_INTERVAL", str(min_interval)))
-    key = (iv, respect_robots)
-    c = _clients.get(key)
-    if c is None:
-        c = PoliteClient(min_interval=iv, respect_robots=respect_robots)
-        _clients[key] = c
-    return c
+ """Shared clients, keyed by (interval, robots) so per-call settings are honored."""
+ iv = float(os.environ.get("INFOSEEK_INTERVAL", str(min_interval)))
+ key = (iv, respect_robots)
+ c = _clients.get(key)
+ if c is None:
+ c = PoliteClient(min_interval=iv, respect_robots=respect_robots)
+ _clients[key] = c
+ return c
 
 
 def _apply_site_filter(results: list[Result], query: str) -> list[Result]:
-    m = re.search(r"site:\s*([\w.-]+)", query)
-    if not m:
-        return results
-    dom = m.group(1).lower()
-    return [r for r in results if dom in (r.url or "").lower()]
+ m = re.search(r"site:\s*([\w.-]+)", query)
+ if not m:
+ return results
+ dom = m.group(1).lower()
+ return [r for r in results if dom in (r.url or "").lower()]
 
 
 _FRESH_ALIASES = {"day": 1, "week": 7, "month": 31, "year": 365}
 
 
 def _freshness_days(freshness) -> float | None:
-    """Accept 'day'/'week'/'month'/'year', '7d', or an int/float number of days."""
-    if freshness is None:
-        return None
-    if isinstance(freshness, (int, float)):
-        return max(0.04, float(freshness))
-    s = str(freshness).strip().lower()
-    if s in _FRESH_ALIASES:
-        return float(_FRESH_ALIASES[s])
-    m = re.match(r"^(\d+)\s*d$", s)
-    if m:
-        return float(int(m.group(1)))
-    try:
-        return max(0.04, float(s))
-    except ValueError:
-        return None
+ """Accept 'day'/'week'/'month'/'year', '7d', or an int/float number of days."""
+ if freshness is None:
+ return None
+ if isinstance(freshness, (int, float)):
+ return max(0.04, float(freshness))
+ s = str(freshness).strip().lower()
+ if s in _FRESH_ALIASES:
+ return float(_FRESH_ALIASES[s])
+ m = re.match(r"^(\d+)\s*d$", s)
+ if m:
+ return float(int(m.group(1)))
+ try:
+ return max(0.04, float(s))
+ except ValueError:
+ return None
 
 
 def _apply_freshness(results: list, days: float | None) -> list:
-    """Drop results with a parseable date older than the window; undated results stay."""
-    if not days:
-        return results
-    from datetime import date, timedelta
-    cutoff = date.today() - timedelta(days=days)
-    out = []
-    for r in results:
-        m = re.search(r"(20\d{2})-(\d{2})-(\d{2})", r.date or "")
-        if m:
-            try:
-                if date(int(m.group(1)), int(m.group(2)), int(m.group(3))) < cutoff:
-                    continue
-            except ValueError:
-                pass
-        out.append(r)
-    return out
+ """Drop results with a parseable date older than the window; undated results stay."""
+ if not days:
+ return results
+ from datetime import date, timedelta
+ cutoff = date.today() - timedelta(days=days)
+ out = []
+ for r in results:
+ m = re.search(r"(20\d{2})-(\d{2})-(\d{2})", r.date or "")
+ if m:
+ try:
+ if date(int(m.group(1)), int(m.group(2)), int(m.group(3))) < cutoff:
+ continue
+ except ValueError:
+ pass
+ out.append(r)
+ return out
 
 
 def _screen_snippets(results: list) -> list:
-    """Guard-screen titles+snippets: drop blocked, flag suspect. µs-fast, cached."""
-    out = []
-    for r in results:
-        v = scan((r.title or "") + "\n" + (r.snippet or ""), url=r.url)
-        if v.level == "blocked":
-            continue
-        if v.level == "suspect":
-            r.extra = ((r.extra + " · ") if r.extra else "") + "[guard:suspect]"
-        out.append(r)
-    return out
+ """Guard-screen titles+snippets: drop blocked, flag suspect. µs-fast, cached."""
+ out = []
+ for r in results:
+ v = scan((r.title or "") + "\n" + (r.snippet or ""), url=r.url)
+ if v.level == "blocked":
+ continue
+ if v.level == "suspect":
+ r.extra = ((r.extra + " · ") if r.extra else "") + "[guard:suspect]"
+ out.append(r)
+ return out
 
 
 async def search(query: str, n: int = 10, engines: str = "auto", fresh: bool = False,
@@ -171,107 +196,107 @@ async def search(query: str, n: int = 10, engines: str = "auto", fresh: bool = F
 
 
 async def search_many(queries, n: int = 6, engines: str = "auto", fresh: bool = False,
-                      freshness=None) -> list[dict]:
-    """Run several queries concurrently and return one merged, deduped, ranked list.
-    Fan-out for iterative agent research: variant phrasings in one round-trip."""
-    queries = [q for q in (queries if isinstance(queries, (list, tuple)) else [queries]) if q and q.strip()]
-    if not queries:
-        return []
-    lists = await asyncio.gather(*[search(q, n=n, engines=engines, fresh=fresh,
-                                          freshness=freshness) for q in queries])
-    groups = [[Result(**d) for d in lst] for lst in lists]
-    order: list[str] = []
-    for g in groups:
-        for r in g:
-            if r.source not in order:
-                order.append(r.source)
-    merged = merge(groups, min(n * len(groups), 24), order)
-    return to_dicts(_screen_snippets(merged))
+ freshness=None) -> list[dict]:
+ """Run several queries concurrently and return one merged, deduped, ranked list.
+ Fan-out for iterative agent research: variant phrasings in one round-trip."""
+ queries = [q for q in (queries if isinstance(queries, (list, tuple)) else [queries]) if q and q.strip()]
+ if not queries:
+ return []
+ lists = await asyncio.gather(*[search(q, n=n, engines=engines, fresh=fresh,
+ freshness=freshness) for q in queries])
+ groups = [[Result(**d) for d in lst] for lst in lists]
+ order: list[str] = []
+ for g in groups:
+ for r in g:
+ if r.source not in order:
+ order.append(r.source)
+ merged = merge(groups, min(n * len(groups), 24), order)
+ return to_dicts(_screen_snippets(merged))
 
 
 async def ask(query: str, n: int = 5, extract_top: int = 2, budget: int = 2500,
-              fresh: bool = False, respect_robots: bool = True, freshness=None,
-              format: str = "text") -> str | dict:
-    """Tavily-style context bundle: search + extract the top pages, trimmed to a
-    token budget (approx tokens ~= budget, chars = budget*4). Feed the result to
-    an LLM to synthesize the final brief answer.
+ fresh: bool = False, respect_robots: bool = True, freshness=None,
+ format: str = "text") -> str | dict:
+ """Tavily-style context bundle: search + extract the top pages, trimmed to a
+ token budget (approx tokens ~= budget, chars = budget*4). Feed the result to
+ an LLM to synthesize the final brief answer.
 
-    freshness: 'day'/'week'/'month'/'year', '7d', or days (int).
-    format='json': returns a dict {query, context, budget_tokens, sources:[...]}
-    with per-source guard verdicts so agents can trace citations."""
-    days = _freshness_days(freshness)
-    engines_list, q = resolve_engines(query, "auto")
-    client = _get_client(1.0, respect_robots=respect_robots)
-    results, errors = await run_engines(client, q, n=max(n + 2, 6), engines_list=engines_list,
-                                        fresh=fresh, freshness_days=days)
-    results = _apply_freshness(_apply_site_filter(results, query), days)
-    merged = merge([results], n, engines_list + [e for e in KEYLESS if e not in engines_list])
-    targets = _pick_targets(merged, q, extract_top)
-    per_page = max(500, budget * 4 // max(extract_top, 1) - 250)
-    extr = await extract_many(client, [r.url for r in targets], max_chars=per_page,
-                              concurrency=4, query=q)
-    _last_errors.update(errors)
-    bundle = fmt_bundle(q, merged, extr, budget_chars=budget * 4)
-    if format == "json":
-        guard_by_url = {x["url"]: x.get("guard") or {} for x in extr}
-        target_urls = {r.url for r in targets}
-        sources = [{"title": r.title, "url": r.url, "source": r.source,
-                    "date": r.date, "score": round(r.score, 2),
-                    "extracted": r.url in target_urls,
-                    "guard": (guard_by_url.get(r.url) or {}).get("level")
-                             if r.url in target_urls else None}
-                   for r in merged]
-        return {"query": q, "context": bundle, "budget_tokens": budget,
-                "sources": sources}
-    return bundle
+ freshness: 'day'/'week'/'month'/'year', '7d', or days (int).
+ format='json': returns a dict {query, context, budget_tokens, sources:[...]}
+ with per-source guard verdicts so agents can trace citations."""
+ days = _freshness_days(freshness)
+ engines_list, q = resolve_engines(query, "auto")
+ client = _get_client(1.0, respect_robots=respect_robots)
+ results, errors = await run_engines(client, q, n=max(n + 2, 6), engines_list=engines_list,
+ fresh=fresh, freshness_days=days)
+ results = _apply_freshness(_apply_site_filter(results, query), days)
+ merged = merge([results], n, engines_list + [e for e in KEYLESS if e not in engines_list])
+ targets = _pick_targets(merged, q, extract_top)
+ per_page = max(500, budget * 4 // max(extract_top, 1) - 250)
+ extr = await extract_many(client, [r.url for r in targets], max_chars=per_page,
+ concurrency=4, query=q)
+ _last_errors.update(errors)
+ bundle = fmt_bundle(q, merged, extr, budget_chars=budget * 4)
+ if format == "json":
+ guard_by_url = {x["url"]: x.get("guard") or {} for x in extr}
+ target_urls = {r.url for r in targets}
+ sources = [{"title": r.title, "url": r.url, "source": r.source,
+ "date": r.date, "score": round(r.score, 2),
+ "extracted": r.url in target_urls,
+ "guard": (guard_by_url.get(r.url) or {}).get("level")
+ if r.url in target_urls else None}
+ for r in merged]
+ return {"query": q, "context": bundle, "budget_tokens": budget,
+ "sources": sources}
+ return bundle
 
 
 async def extract(url: str, max_chars: int = 10000, fresh: bool = False,
                   respect_robots: bool = True, guard: bool = True) -> str:
     """Fetch one URL and return clean trimmed text (robots.txt respected by default).
 
-    With guard=True (default), prompt-injection attempts are denied: blocked content
-    is replaced by a short denial note instead of the hostile text."""
-    client = _get_client(1.0, respect_robots=respect_robots)
-    from . import cache as _c
-    if not fresh:
-        hit = _c.get("ext", url, ttl=604800)
-        if hit:
-            return hit
-    txt = await extract_url(client, url, max_chars=max_chars)
-    if txt and guard:
-        v = scan(txt, url=url)
-        if v.level == "blocked" and guard.POLICY != "off":
-            txt = f"[[denied: {v.short()}]]"
-    if txt and not fresh:
-        _c.set("ext", url, value=txt, ttl=604800)
-    if not txt:
-        return f"[extract: no content retrieved for {url} (network error, robots.txt, or empty page)]"
-    return txt
+ With guard=True (default), prompt-injection attempts are denied: blocked content
+ is replaced by a short denial note instead of the hostile text."""
+ client = _get_client(1.0, respect_robots=respect_robots)
+ from . import cache as _c
+ if not fresh:
+ hit = _c.get("ext", url, ttl=604800)
+ if hit:
+ return hit
+ txt = await extract_url(client, url, max_chars=max_chars)
+ if txt and guard:
+ v = scan(txt, url=url)
+ if v.level == "blocked" and guard.POLICY != "off":
+ txt = f"[[denied: {v.short()}]]"
+ if txt and not fresh:
+ _c.set("ext", url, value=txt, ttl=604800)
+ if not txt:
+ return f"[extract: no content retrieved for {url} (network error, robots.txt, or empty page)]"
+ return txt
 
 
 async def suggest(query: str) -> str:
-    """DuckDuckGo autocomplete suggestions (keyless)."""
-    client = _get_client(1.0)
-    try:
-        r = await client.get("https://duckduckgo.com/ac/", params={"q": query, "type": "list"})
-        if r.status_code == 200:
-            j = r.json()
-            return "\n".join(f"- {s}" for s in j[1][:10]) if len(j) > 1 and j[1] else "_no suggestions_"
-        return "_suggest unavailable_"
-    except Exception as e:
-        return f"_suggest error: {type(e).__name__}_"
+ """DuckDuckGo autocomplete suggestions (keyless)."""
+ client = _get_client(1.0)
+ try:
+ r = await client.get("https://duckduckgo.com/ac/", params={"q": query, "type": "list"})
+ if r.status_code == 200:
+ j = r.json()
+ return "\n".join(f"- {s}" for s in j[1][:10]) if len(j) > 1 and j[1] else "_no suggestions_"
+ return "_suggest unavailable_"
+ except Exception as e:
+ return f"_suggest error: {type(e).__name__}_"
 
 
 async def status() -> str:
-    """Engine availability, cache size, and last errors."""
-    return fmt_status(available(), _last_errors, _cache_info(), [str(os.environ.get("INFOSEEK_INTERVAL", "1.0"))])
+ """Engine availability, cache size, and last errors."""
+ return fmt_status(available(), _last_errors, _cache_info(), [str(os.environ.get("INFOSEEK_INTERVAL", "1.0"))])
 
 
 async def run(query: str, n: int = 6, engines: str = "auto", fresh: bool = False,
-              budget: int = 0, min_interval: float = 1.0) -> str:
-    """The one-call entry point - routes by query shape so callers never have
-    to pick a function:
+ budget: int = 0, min_interval: float = 1.0) -> str:
+ """The one-call entry point - routes by query shape so callers never have
+ to pick a function:
 
     * bare URL                -> extract() the page (archive fallback included)
     * 'ask: ...'              -> ask() context bundle (budget tokens cap it)
@@ -304,10 +329,14 @@ async def run(query: str, n: int = 6, engines: str = "auto", fresh: bool = False
     return fmt_search([Result(**d) for d in res]) if res else no_results_hint(q, engines)
 
 
+<<<<<<< HEAD
+__all__ = ["run", "search", "ask", "extract", "suggest", "status", "selfcheck", "Result",
+ "find", "research", "read", "deep", "help"]
+=======
 def help() -> str:
-    """Usage cheat sheet - the whole tool surface in ~20 lines. Feed this to
-    any agent that is unsure how to call infoseek."""
-    return """infoseek - keyless web research (no API keys). One call does the right thing:
+ """Usage cheat sheet - the whole tool surface in ~20 lines. Feed this to
+ any agent that is unsure how to call infoseek."""
+ return """infoseek - keyless web research (no API keys). One call does the right thing:
 
   await infoseek.run("rust vs go")          -> formatted search results
   await infoseek.run("https://...")         -> clean page text (archive fallback)
@@ -342,28 +371,28 @@ __all__ = ["run", "help", "no_results_hint", "search", "search_many", "smart_sea
 
 
 def _pick_targets(merged: list, query: str, k: int) -> list:
-    """Choose extraction targets: highest merged score, boosted by query-term presence
-    in snippet/title, penalized for redirect wrappers; one per domain."""
-    terms = [x for x in re.split(r"\W+", query.lower()) if len(x) > 2]
-    scored = []
-    for r in merged:
-        s = r.score
-        if "news.google.com" in r.url:
-            s -= 3.0
-        blob = ((r.snippet or "") + " " + r.title).lower()
-        if terms and any(x in blob for x in terms):
-            s += 2.0
-        scored.append((s, r))
-    scored.sort(key=lambda x: -x[0])
-    seen: set[str] = set()
-    out = []
-    for _, r in scored:
-        dom = urlparse(r.url).netloc
-        if dom in seen:
-            continue
-        seen.add(dom)
-        out.append(r)
-        if len(out) >= k:
-            break
-    return out
+ """Choose extraction targets: highest merged score, boosted by query-term presence
+ in snippet/title, penalized for redirect wrappers; one per domain."""
+ terms = [x for x in re.split(r"\W+", query.lower()) if len(x) > 2]
+ scored = []
+ for r in merged:
+ s = r.score
+ if "news.google.com" in r.url:
+ s -= 3.0
+ blob = ((r.snippet or "") + " " + r.title).lower()
+ if terms and any(x in blob for x in terms):
+ s += 2.0
+ scored.append((s, r))
+ scored.sort(key=lambda x: -x[0])
+ seen: set[str] = set()
+ out = []
+ for _, r in scored:
+ dom = urlparse(r.url).netloc
+ if dom in seen:
+ continue
+ seen.add(dom)
+ out.append(r)
+ if len(out) >= k:
+ break
+ return out
 
