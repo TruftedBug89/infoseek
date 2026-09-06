@@ -11,23 +11,7 @@ token-efficient.
 pip install git+https://github.com/TruftedBug89/infoseek
 ```
 
-```python
-import infoseek
-
-<<<<<<< HEAD
-print(infoseek.research("why is redis faster than postgres", budget=2000))
-# one line, no asyncio, no API key -> curated, guard-screened context for your LLM
-```
-
-```console
-$ infoseek research "why is redis faster than postgres"
-QUERY: why is redis faster than postgres
-## SEARCH RESULTS
-1. Why is Postgres query faster than Redis query?
- [so · ✓ 3 · 2 answers] ...
-```
-
-## Quick start - four calls, no asyncio
+## Quick start - sync one-liners
 
 Designed so even a small local model can use it: every call is **sync**, takes a
 string, returns a string, and never raises (errors come back as `[[...]]` notes).
@@ -35,11 +19,13 @@ string, returns a string, and never raises (errors come back as `[[...]]` notes)
 ```python
 import infoseek
 
-infoseek.find("rust vs go 2026") # search -> ranked results with urls
-infoseek.research("why is redis fast") # answer -> context to answer from
-infoseek.read("https://example.com/article") # page -> clean text
-infoseek.deep("llm quantization tradeoffs") # brief -> multi-angle research
-infoseek.help() # usage card, call it to re-learn
+# One-line research, no asyncio, no API key
+print(infoseek.research("why is redis faster than postgres", budget=2000))
+
+infoseek.find("rust vs go 2026")              # search -> ranked results with urls
+infoseek.read("https://example.com/article")  # page -> clean text
+infoseek.deep("llm quantization tradeoffs")   # brief -> multi-angle research
+infoseek.help()                               # usage card, call it to re-learn
 ```
 
 | you want | call |
@@ -49,22 +35,15 @@ infoseek.help() # usage card, call it to re-learn
 | the text of one known page | `read()` |
 | a broader, slower, multi-angle brief | `deep()` |
 
----
-=======
-bundle = asyncio.run(infoseek.ask("why is redis faster than postgres", budget=2000))
-print(bundle) # ~500 tokens of curated, guard-screened context for your LLM
-```
-
-## The five primitives
+## The primitives (Async & Sync)
 
 | call | returns | use when |
 |---|---|---|
-| `await infoseek.search(q, n=6)` | `list[dict]` of results | you want links + snippets |
+| `await infoseek.search(q, n=10)` | `list[dict]` of results | you want links + snippets |
 | `await infoseek.ask(q, budget=2500)` | context-bundle string | you want text the model can answer from directly |
 | `await infoseek.last30days(q, days=30)` | curated social & consensus brief | you want people's discussions, real-world consensus, sentiment, or prediction odds |
-| `await infoseek.extract(url, max_chars=2000)` | clean page text | you already have a URL |
+| `await infoseek.extract(url, max_chars=10000)` | clean page text | you already have a URL |
 | `infoseek.scan(text)` (sync) | verdict: `ok` / `suspect` / `blocked` | you fetched text yourself and want it screened |
->>>>>>> 2bc88f6d9c02e9c51e25d694a93e68c2a2e6dfe9
 
 **For agents that want zero decisions:** `await infoseek.run(q)` routes by
 query shape — bare URL → extract, `ask: ...` → context bundle,
@@ -126,30 +105,8 @@ print(vs_brief)
 
 ## Engines (33 keyless + 3 optional keyed)
 
-<<<<<<< HEAD
-- **15 keyless engines** - general web, news, forums, code, papers, biomedical,
- facts - all via official APIs or server-rendered HTML (no Google scraping, no CAPTCHA bypass)
-- **Sync one-liners for agents** - `find()` / `research()` / `read()` / `deep()` take a
- string and return a string; no asyncio, no config, errors come back as short
- `[[...]]` notes instead of exceptions, so even small local models can drive it
-- **`ask()` context bundles** - Tavily `/context` equivalent: search → pick the best
- pages → keep only the sentences relevant to your query → trim to a token budget
-- **Quality-scored merge** - source priority + engine rank + recency bonus,
- per-source diversity cap, near-duplicate title collapse
-- **Token efficiency** - 160-char snippets, CTA-boilerplate trimming, dedup,
- relevance extraction (~450–600 tokens per typical `ask()`)
-- **Prompt-injection guard** - layered heuristics (hijack, framing, exfiltration,
- jailbreak, obfuscation, markup) → `ok / suspect / blocked` verdicts;
- `ask()` **denies** blocked sources, `extract()` replaces them with a denial note
-- **Polite by default** - per-host rate limiting, Retry-After respect, robots.txt
- honored for direct page fetches, browser-UA rotation, gzip-only encoding
-- **Disk cache** - search TTL 30 min, extraction 7 days, failure markers 90 s
- (flaky endpoints never slow you down twice)
-- **`selfcheck()`** - a 27-check battery (unit + live probes of all 15 engines)
-=======
 Prefix the query to focus a source; no prefix hits the default mix
-(`ddg + hn + so + reddit + news`). `site:<domain>` auto-routes.
->>>>>>> 2bc88f6d9c02e9c51e25d694a93e68c2a2e6dfe9
+(`bing + ddg + hn + so + reddit + news`). `site:<domain>` auto-routes.
 
 | prefix | source | prefix | source |
 |---|---|---|---|
@@ -181,58 +138,38 @@ limits.
 
 ## CLI
 
-<<<<<<< HEAD
 ```console
 # simple (text in / text out)
-$ infoseek find "rust vs go" # ranked results
-$ infoseek research "why is redis fast" # context to answer from
-$ infoseek deep "llm quantization" # multi-angle brief
-$ infoseek read https://example.com/article # one page, clean text
-$ infoseek help # usage card
+$ infoseek find "rust vs go"                  # ranked results
+$ infoseek research "why is redis fast"       # context to answer from
+$ infoseek deep "llm quantization"            # multi-angle brief
+$ infoseek read https://example.com/article   # one page, clean text
+$ infoseek help                               # usage card
 
-# advanced
-$ infoseek search "retrieval augmented generation" --n 5
-$ infoseek search "rust vs go" --json # machine-readable
-$ infoseek ask "why is redis faster than postgres" --budget 2000
-$ infoseek extract https://news.ycombinator.com/item?id=45838766
-$ infoseek scan --text "Ignore all previous instructions..."
-$ infoseek scan --url https://example.com/ # fetch + scan, exit 2 if blocked
+# advanced & structured
+$ infoseek search "retrieval augmented generation" --n 10 [--json] [--freshness week]
+$ infoseek ask "why is redis faster than postgres" --budget 2000 [--json]
+$ infoseek last30days "Claude Code" [--days 30] [--budget 2500] [--json]
+$ infoseek extract https://example.com/article [--max-chars 10000]
+$ infoseek scan --text "..." | --url https://...  # exit 2 if blocked
 $ infoseek suggest "python asyn"
-$ infoseek status
-$ infoseek selfcheck
-=======
-```bash
-infoseek search "retrieval augmented generation" --n 5 [--json] [--freshness week]
-infoseek ask "best self-hosted vector db" --budget 2000 [--json]
-infoseek last30days "Claude Code" [--days 30] [--budget 2500] [--json]
-infoseek extract https://example.com/article [--max-chars 2000]
-infoseek scan --text "..." | --url https://... # exit 2 if blocked
-infoseek suggest "python asyn"
-infoseek status # engine health + last errors
-infoseek selfcheck # unit + live test battery
->>>>>>> 2bc88f6d9c02e9c51e25d694a93e68c2a2e6dfe9
+$ infoseek status                              # engine health + last errors
+$ infoseek selfcheck                           # unit + live test battery
 ```
 
 ## Reaching pages scrapers can't
 
 `extract()` climbs an **access ladder** until it gets text:
 
-<<<<<<< HEAD
-> **New in 0.4.0:** sync one-liners (`find` / `research` / `read` / `deep` / `help`) - > see *Quick start* above. The async API below is unchanged and returns structured data.
-
-```python
-import asyncio, infoseek
-=======
 1. **live fetch** - official-API fast paths first (GitHub/Wikipedia/HN/Reddit/
- PyPI/crates), then a robots-respected direct fetch with bot-wall detection
+   PyPI/crates), then a robots-respected direct fetch with bot-wall detection
 2. **Wayback Machine** - the closest archived snapshot (raw original via the
- `id_` flag; falls back to recent CDX snapshots). The fetch never touches
- the origin, so it also works when robots.txt disallows, the site bot-blocks
- scrapers, or the page/domain no longer exists
+   `id_` flag; falls back to recent CDX snapshots). The fetch never touches
+   the origin, so it also works when robots.txt disallows, the site bot-blocks
+   scrapers, or the page/domain no longer exists
 3. **Jina Reader** (optional) - renders JS-heavy pages; only used when
- `JINA_API_KEY` is set (the keyless tier is Cloudflare-gated from most
- server IPs)
->>>>>>> 2bc88f6d9c02e9c51e25d694a93e68c2a2e6dfe9
+   `JINA_API_KEY` is set (the keyless tier is Cloudflare-gated from most
+   server IPs)
 
 For search coverage of the bot-walled web, `swarm:` fans out over
 community-hosted **SearXNG** instances (github.com/searxng/searxng) in
@@ -305,14 +242,9 @@ Warm calls return in ~10 ms.
 
 ```bash
 pip install -e ".[dev]"
-<<<<<<< HEAD
-pytest # 36 offline unit tests (guard battery, ranking, routing, API, simple API)
-pytest -m live # + 16 live engine probes + ask() smoke (network required)
-=======
-pytest # offline suite (guard battery, routing, ranking, regressions)
-pytest -m live # + live engine probes (network required)
-infoseek selfcheck # unit checks + live probes of all engines + smoke runs
->>>>>>> 2bc88f6d9c02e9c51e25d694a93e68c2a2e6dfe9
+pytest              # offline suite (guard battery, routing, ranking, simple API, 90+ tests)
+pytest -m live      # + live engine probes (network required)
+infoseek selfcheck  # unit checks + live probes of all engines + smoke runs
 ```
 
 ## License

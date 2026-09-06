@@ -31,12 +31,6 @@ Requires Python >= 3.10.
 pip install git+https://github.com/TruftedBug89/infoseek # or: pip install -e ".[dev]" from a checkout
 ```
 
-Prefer the **MCP server** when the harness supports it:
-`pip install "infoseek[mcp]"` and register stdio command
-`python -m infoseek.mcp` — tools appear as `search`, `ask`, `last30days`,
-`extract`, `scan`, `suggest`, `status`, `selfcheck`, `run`.
-
-<<<<<<< HEAD
 Drop-in skill layouts: the repo root IS the skill directory - [opencode](https://opencode.ai) auto-loads `~/.agents/skills/infoseek/SKILL.md`,
 [Prime Agent](https://github.com/prime-intellect-ai/prime-agent) uses
 `~/.agents/skills/infoseek`, Hermes uses `~/.hermes/skills/research/infoseek`

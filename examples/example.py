@@ -37,15 +37,11 @@ async def advanced():
  v = infoseek.scan(sample)
  print(f" {v.level:8s} score={v.score:2d} {sample[:50]}")
 
-<<<<<<< HEAD
- print("\n== 7. status ==")
-=======
- print("\n== 5. run() - the zero-decision entry point ==")
+ print("\n== 7. run() - the zero-decision entry point ==")
  print((await infoseek.run("https://pythonhosted.org/setuptools/"))[:200],
  " <- dead page, served from the Wayback Machine")
 
- print("\n== 6. status ==")
->>>>>>> 2bc88f6d9c02e9c51e25d694a93e68c2a2e6dfe9
+ print("\n== 8. status ==")
  print((await infoseek.status())[:300])
 
 
