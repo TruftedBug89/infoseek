@@ -503,7 +503,20 @@ async def extract_url(client: PoliteClient, url: str, max_chars: int = 10000) ->
     host = parsed.netloc.lower()
     path = parsed.path
 
-    # Fast path: raw code / raw GitHub / Gists / pastebins
+    # Fast path: Gists
+    if "gist.github.com" in host:
+        seg = path.strip("/").split("/")
+        if len(seg) >= 2:
+            raw_gist = f"https://gist.githubusercontent.com/{seg[0]}/{seg[1]}/raw"
+            try:
+                r = await client.get(raw_gist)
+                if r.status_code == 200:
+                    return _trim(r.text, max_chars)
+            except Exception:
+                pass
+        return await _access_ladder(client, url, path, max_chars)
+
+    # Fast path: raw code / raw GitHub / pastebins
     if "raw.githubusercontent.com" in host or "gist.githubusercontent.com" in host or "pastebin.com/raw" in url:
         try:
             r = await client.get(url)
@@ -512,6 +525,51 @@ async def extract_url(client: PoliteClient, url: str, max_chars: int = 10000) ->
         except httpx.HTTPError:
             pass
         return await _access_ladder(client, url, path, max_chars)
+
+    # Fast path: Hugging Face model cards
+    if "huggingface.co" in host or "hf.co" in host:
+        seg = path.strip("/").split("/")
+        if len(seg) >= 2 and seg[0] not in ("spaces", "datasets", "docs", "blog", "posts", "join", "login", "api"):
+            owner, model = seg[0], seg[1]
+            raw_readme = f"https://huggingface.co/{owner}/{model}/raw/main/README.md"
+            try:
+                r = await client.get(raw_readme)
+                if r.status_code == 200 and r.text.strip():
+                    return _trim(r.text, max_chars)
+            except Exception:
+                pass
+            try:
+                r = await client.get(f"https://huggingface.co/api/models/{owner}/{model}", timeout=8)
+                if r.status_code == 200:
+                    info = r.json()
+                    desc = f"Hugging Face Model: {info.get('id', '')}\nPipeline: {info.get('pipeline_tag','')}\nDownloads: {info.get('downloads',0)} · Likes: {info.get('likes',0)}\nTags: {', '.join(info.get('tags',[]))}"
+                    return _trim(desc, max_chars)
+            except Exception:
+                pass
+
+    # Fast path: Google News article redirects
+    if "news.google.com" in host:
+        p_parts = path.strip("/").split("/")
+        if len(p_parts) >= 2 and p_parts[-2] in ("articles", "read"):
+            base64_str = p_parts[-1]
+            import base64
+            try:
+                pad = len(base64_str) % 4
+                decoded_bytes = base64.urlsafe_b64decode(base64_str + ("=" * (4 - pad) if pad else ""))
+                decoded_str = decoded_bytes.decode("latin1", "ignore")
+                prefix = bytes([0x08, 0x13, 0x22]).decode("latin1")
+                if decoded_str.startswith(prefix):
+                    decoded_str = decoded_str[len(prefix):]
+                    suffix = bytes([0xD2, 0x01, 0x00]).decode("latin1")
+                    if decoded_str.endswith(suffix):
+                        decoded_str = decoded_str[:-len(suffix)]
+                    bytes_array = bytearray(decoded_str, "latin1")
+                    length = bytes_array[0]
+                    target_url = decoded_str[2:length+1] if length >= 0x80 else decoded_str[1:length+1]
+                    if target_url.startswith("http"):
+                        return await extract_url(client, target_url, max_chars=max_chars)
+            except Exception:
+                pass
 
     # Official-API and GitHub fast paths
     if "github.com" in host:

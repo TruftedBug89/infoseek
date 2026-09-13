@@ -12,7 +12,7 @@ SUFFIX = re.compile(r"\s*[-|–—:]\s*[A-Z][A-Za-z0-9 .&'()]{2,40}$")
 # Source priority (higher = more trust at same rank). Tuned: general web + expert Q&A
 # first, forums/news after.
 PRIORITY = {
-    "ddg": 10, "pypi": 10, "npm": 10, "crates": 10, "mdn": 10,
+    "bing": 10, "hf": 10, "ddg": 10, "pypi": 10, "npm": 10, "crates": 10, "mdn": 10,
     "so": 9, "hn": 8, "gh": 8, "wiki": 8, "arxiv": 8, "openalex": 8,
     "polymarket": 9, "techmeme": 8, "bluesky": 7, "stocktwits": 7,
     "pubmed": 8, "crossref": 7, "wikidata": 7, "reddit": 7,
@@ -59,6 +59,8 @@ def clean_title(t: str) -> str:
 
 
 def clean(s: str, limit: int = 160) -> str:
+    import html as _html
+    s = _html.unescape(s or "")
     s = " ".join(s.split())
     # cut CTA boilerplate at the trail
     m = CTA.search(s, 30)
@@ -155,4 +157,13 @@ def merge(groups: list[list[Result]], n: int, order: list[str]) -> list[Result]:
 
 
 def to_dicts(results: list[Result]) -> list[dict]:
-    return [asdict(r) for r in results]
+    import html as _html
+    out = []
+    for r in results:
+        d = asdict(r)
+        if isinstance(d.get("title"), str):
+            d["title"] = _html.unescape(d["title"])
+        if isinstance(d.get("snippet"), str):
+            d["snippet"] = _html.unescape(d["snippet"])
+        out.append(d)
+    return out

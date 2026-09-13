@@ -117,16 +117,17 @@ Prefix the query to focus a source; no prefix hits the default mix
 | `so:` | Stack Overflow / Exchange | `wikidata:` / `wd:` | structured facts (Q-IDs) |
 | `news:` | Google News RSS | `gh:` | GitHub repos |
 | `wiki:` | Wikipedia | `code:` | code search (grep.app) |
-| `pypi:` / `pip:` | Python packages | `npm:` / `node:` | JS/TS packages |
-| `crates:` / `rust:` | Rust crates | `mdn:` / `docs:` | MDN Web Docs |
-| `yt:` / `youtube:` | YouTube videos | `lobsters:` | lobste.rs |
-| `marginalia:` | small / indie web | `issues:` | GitHub issues + PRs |
-| `prs:` | GitHub pull requests | `releases:` | GitHub release notes |
-| `changelog:` | changelog finder | `error:` | error message → fixes |
-| `compat:` | version compatibility | `wayback:`/`wb:` | Wayback Machine snapshots |
-| `commoncrawl:`/`cc:` | Common Crawl index | `swarm:` | SearXNG instance swarm |
-| `polymarket:` / `poly:` | Polymarket prediction odds & volume | `techmeme:` | Techmeme breaking tech news |
-| `bluesky:` / `bsky:` | Bluesky social posts & sentiment | `stocktwits:` / `twits:` | StockTwits ticker & cashtag streams |
+| `hf:` / `huggingface:` | Hugging Face models & quants (GGUF) | `pypi:` / `pip:` | Python packages |
+| `crates:` / `rust:` | Rust crates | `npm:` / `node:` | JS/TS packages |
+| `yt:` / `youtube:` | YouTube videos | `mdn:` / `docs:` | MDN Web Docs |
+| `marginalia:` | small / indie web | `lobsters:` | lobste.rs |
+| `issues:` | GitHub issues + PRs | `prs:` | GitHub pull requests |
+| `releases:` | GitHub release notes | `changelog:` | changelog finder |
+| `error:` | error message → fixes | `compat:` | version compatibility |
+| `wayback:`/`wb:` | Wayback Machine snapshots | `commoncrawl:`/`cc:` | Common Crawl index |
+| `swarm:` | SearXNG instance swarm | `polymarket:` / `poly:` | Polymarket prediction odds & volume |
+| `techmeme:` | Techmeme breaking tech news | `bluesky:` / `bsky:` | Bluesky social posts & sentiment |
+| `stocktwits:` / `twits:` | StockTwits ticker & cashtag streams | | |
 
 `engines="wide"` switches `search()` to the maximum-coverage mix
 (ddg + swarm + hn + so + news).

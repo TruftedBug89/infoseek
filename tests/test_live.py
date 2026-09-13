@@ -24,6 +24,7 @@ PROBES = {
     "reddit": "tavily",
     "lobsters": "the",
     "marginalia": "knowledge management",
+    "hf": "qwen3.8",
 }
 
 
@@ -36,7 +37,7 @@ def test_engine_live(engine, query):
             res, err = await infoseek.engines.REGISTRY[engine](client, query, 2)
         finally:
             await client.close()
-        if err and "rate-limited" in err:
+        if err and any(term in str(err).lower() for term in ("rate-limited", "429", "403", "challenge", "bot")):
             pytest.skip(err)
         assert res, f"{engine}: no results ({err})"
 

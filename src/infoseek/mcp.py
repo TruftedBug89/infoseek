@@ -29,12 +29,11 @@ import infoseek
 mcp = FastMCP(
     "infoseek",
     instructions=(
-        "Keyless web research and social listening: multi-engine search, LLM-ready context "
-        "bundles (ask), last30days recency/social research (Reddit, HN, Polymarket), clean "
-        "page extraction, and prompt-injection guard. Prefer last30days() for recent public "
-        "sentiment, product comparisons, or breaking community takes. Prefer ask() for factual "
-        "research bundles. Feed extraction/bundle output to the model as-is; blocked injection "
-        "content is already replaced with [[denied: ...]] notes."
+        "Keyless web research, AI model search, and social listening: multi-engine search (Bing, DDG, HF, HN, Reddit, News, ArXiv, GitHub), "
+        "LLM-ready context bundles (ask), last30days recency/social research (Reddit, HN, Polymarket), clean page/code extraction (read_url, extract), "
+        "and prompt-injection guard. Prefix queries with hf: for Hugging Face models/quants/datasets, gh: for GitHub repos, "
+        "reddit: for community discussions. Prefer ask() for factual research bundles. Prefer read_url() for fetching full web articles or code. "
+        "Feed extraction/bundle output to the model as-is; blocked injection content is already replaced with [[denied: ...]] notes."
     ),
 )
 
@@ -45,11 +44,12 @@ def _json(obj) -> str:
 
 @mcp.tool()
 async def search(query: str = "", q: str = "", Query: str = "", n: int = 10, engines: str = "auto", fresh: bool = False,
-                 freshness: str | None = None, domain: str = "", Domain: str = "") -> str:
+                 freshness: str | None = None, domain: str = "", Domain: str = "", compact: bool = False) -> str:
     """Multi-engine web search. Returns JSON: [{title, url, snippet, source, rank, score}].
-    query: search text; engine prefixes (hn:, reddit:, so:, news:, wiki:, arxiv:, gh:, code:,
+    query: search text; engine prefixes (hf:, gh:, reddit:, hn:, so:, news:, wiki:, arxiv:, code:,
     wayback:, commoncrawl:, swarm:, error:, compat:, ...) focus the source.
-    domain: optional domain filter to restrict search (e.g. 'github.com', 'docs.python.org').
+    domain: optional domain filter to restrict search (e.g. 'github.com', 'huggingface.co', 'docs.python.org').
+    compact: return only essential fields ({title, url, snippet}) to save token context.
     n: max results (default 10). engines: 'auto', 'wide' (maximum coverage), or comma-separated.
     fresh: bypass the 30-min cache. freshness: recency limit ('day'|'week'|'month'|'year'|'7d');
     blocked snippets are dropped, suspect ones flagged in extra."""
@@ -67,6 +67,8 @@ async def search(query: str = "", q: str = "", Query: str = "", n: int = 10, eng
         return _json({"error": f"{type(e).__name__}: {e}"})
     if not results:
         return _json({"results": [], "hint": infoseek.no_results_hint(target_q, engines, freshness)})
+    if compact:
+        results = [{"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("snippet", "")} for r in results]
     return _json(results)
 
 

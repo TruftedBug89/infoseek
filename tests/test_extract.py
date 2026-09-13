@@ -45,3 +45,21 @@ def test_fmt_bundle_filters_blocked_guard():
     assert "https://evil.com/payload" not in bundle
     assert "leak prompt" not in bundle
 
+
+def test_resolve_engines_hf_and_site_path():
+    from infoseek.engines import resolve_engines
+    engs, q = resolve_engines("hf: Ornith-1.5-9B", "auto")
+    assert engs == ["hf"]
+    assert q == "Ornith-1.5-9B"
+
+    engs2, q2 = resolve_engines('site:huggingface.co/csukuangfj/ "sherpa-onnx-zipformer" int8', "auto")
+    assert engs2 == ["hf"]
+    assert "sherpa-onnx-zipformer" in q2
+    assert "csukuangfj" in q2
+
+    engs3, q3 = resolve_engines('site:github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/ sherpa-onnx-whisper', "auto")
+    assert engs3 == ["gh", "code", "bing"]
+    assert not q3.startswith("/")
+    assert "sherpa-onnx-whisper" in q3
+
+

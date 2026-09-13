@@ -71,3 +71,14 @@ def test_mcp_domain_search(monkeypatch):
     assert len(data) == 1
     assert data[0]["title"] == "FastAPI"
 
+
+def test_mcp_compact_search(monkeypatch):
+    async def fake_search(query, **kwargs):
+        return [{"title": "Test Model", "url": "https://huggingface.co/test/model", "snippet": "Test snippet", "score": 9.5, "source": "hf", "rank": 0}]
+    monkeypatch.setattr(mcp.infoseek, "search", fake_search)
+    out = asyncio.run(mcp.search(query="test", compact=True))
+    data = json.loads(out)
+    assert len(data) == 1
+    assert set(data[0].keys()) == {"title", "url", "snippet"}
+
+

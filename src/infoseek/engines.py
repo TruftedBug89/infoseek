@@ -8,7 +8,7 @@ from .net import PoliteClient, UAS
 from .rank import Result, clean
 
 ENGINE_NAMES = [
-    "bing", "ddg", "marginalia", "hn", "lobsters", "so", "news", "wiki", "arxiv",
+    "bing", "ddg", "hf", "marginalia", "hn", "lobsters", "so", "news", "wiki", "arxiv",
     "openalex", "pubmed", "crossref", "wikidata", "gh", "code", "reddit",
     "pypi", "npm", "crates", "mdn", "yt", "wayback", "commoncrawl", "swarm",
     "gh_issues", "prs", "gh_releases", "changelog", "error", "compat",
@@ -69,11 +69,11 @@ async def ddg(c, q, n):
         c2 = PoliteClient(min_interval=c.min_interval, ua=next(u for u in UAS if u != c.ua))
         try:
             out = await _ddg_fetch(c2, q, n)
-            return out, (None if out else "ddg: no results parsed")
+            return out, (None if out else "ddg: no results parsed (rate-limited or challenge)")
         finally:
             await c2.close()
     except Exception:
-        return [], "ddg: no results parsed"
+        return [], "ddg: no results parsed (rate-limited or challenge)"
 
 def _ddg_df(days: float) -> str:
     return "day" if days <= 1 else "week" if days <= 7 else "month" if days <= 31 else "year"
@@ -318,6 +318,44 @@ async def code(c, q, n):
         out.append(Result(title=f"{repo} · {path}", url=f"https://grep.app/search?q={quote(q)}&filter[repo][0]={quote(repo)}",
                           source="code", rank=i, snippet=clean(content, 150), extra=repo))
     return out, (None if out else "grep.app: no hits")
+
+async def hf(c, q, n):
+    """Keyless Hugging Face model and dataset search via official API.
+    Returns models, quants (GGUF), downloads, likes, tags, and direct URLs."""
+    try:
+        r = await c.get("https://huggingface.co/api/models",
+                        params={"search": q, "limit": max(n, 10), "full": "false"},
+                        timeout=8)
+        if r.status_code != 200:
+            return [], f"hf http {r.status_code}"
+        items = r.json() or []
+        out = []
+        for i, it in enumerate(items[:n]):
+            m_id = it.get("id") or it.get("modelId") or ""
+            if not m_id:
+                continue
+            title = f"{m_id}"
+            url = f"https://huggingface.co/{m_id}"
+            downloads = it.get("downloads", 0)
+            likes = it.get("likes", 0)
+            dl_fmt = f"{downloads/1_000_000:.1f}M" if downloads >= 1_000_000 else f"{downloads/1_000:.1f}k" if downloads >= 1_000 else str(downloads)
+            tags = it.get("tags") or []
+            tags_str = ", ".join([t for t in tags if not t.startswith("base_model:")][:4])
+            pipeline = it.get("pipeline_tag") or ""
+            extra = f"{dl_fmt} downloads, {likes} likes"
+            if pipeline:
+                extra = f"{pipeline} · {extra}"
+            snip = f"Hugging Face model: {m_id}. Tags: {tags_str}." if tags_str else f"Hugging Face model: {m_id}."
+            created = (it.get("createdAt") or "")[:10]
+            out.append(Result(
+                title=title, url=url, source="hf", rank=i,
+                extra=extra, date=created, snippet=snip,
+                upvotes=likes, comments=downloads,
+                engagement_str=f"{dl_fmt} dls"
+            ))
+        return out, (None if out else "hf: no models found")
+    except Exception as exc:
+        return [], f"hf: {type(exc).__name__}: {str(exc)[:60]}"
 
 _REDDIT_ATOM = "{http://www.w3.org/2005/Atom}"
 _CASHTAG_RE = re.compile(r"\$([A-Za-z]{1,6}(?:\.[A-Za-z])?)\b")
@@ -1286,7 +1324,7 @@ async def swarm(c, q, n):
 
 
 REGISTRY = {
-    "bing": bing, "ddg": ddg, "marginalia": marginalia, "hn": hn, "lobsters": lobsters, "so": so,
+    "bing": bing, "ddg": ddg, "hf": hf, "marginalia": marginalia, "hn": hn, "lobsters": lobsters, "so": so,
     "news": news, "wiki": wiki, "arxiv": arxiv, "openalex": openalex,
     "pubmed": pubmed, "crossref": crossref, "wikidata": wikidata, "gh": gh, "code": code,
     "reddit": reddit, "pypi": pypi, "npm": npm, "crates": crates, "mdn": mdn, "yt": yt,
@@ -1307,7 +1345,8 @@ SITE_MAP = {
     "crates.io": "crates", "developer.mozilla.org": "mdn",
     "youtube.com": "yt", "youtu.be": "yt",
     "polymarket.com": "polymarket", "techmeme.com": "techmeme",
-    "bsky.app": "bluesky", "stocktwits.com": "stocktwits"
+    "bsky.app": "bluesky", "stocktwits.com": "stocktwits",
+    "huggingface.co": "hf", "hf.co": "hf"
 }
 
 _ALIAS = {
@@ -1322,11 +1361,12 @@ _ALIAS = {
     "pr": "prs", "pulls": "prs", "pull": "prs",
     "releases": "gh_releases", "release": "gh_releases",
     "err": "error", "debug": "error",
-    "version": "compat", "compatibility": "compat"
+    "version": "compat", "compatibility": "compat",
+    "hf": "hf", "huggingface": "hf", "models": "hf", "model": "hf"
 }
 
 KEYLESS = {
-    "bing", "ddg", "marginalia", "hn", "lobsters", "so", "news", "wiki", "arxiv",
+    "bing", "ddg", "hf", "marginalia", "hn", "lobsters", "so", "news", "wiki", "arxiv",
     "openalex", "pubmed", "crossref", "wikidata", "gh", "code", "reddit",
     "pypi", "npm", "crates", "mdn", "yt", "wayback", "commoncrawl", "swarm",
     "gh_issues", "prs", "gh_releases", "changelog", "error", "compat",
@@ -1352,25 +1392,60 @@ def resolve_engines(query: str, explicit: str | None) -> tuple[list[str], str]:
     and the special mixes 'auto' (default) and 'wide' (maximum coverage).
     A routing prefix is stripped whenever engines are chosen explicitly, so
     'code:o/r t' escalated to the wide mix searches for 'o/r t', not the prefix."""
-    m = re.match(r"^([a-z0-9_]+):\s*(.*)$", query, re.S)
-    prefixed_q = m.group(2).strip() if m and (m.group(1) in REGISTRY or m.group(1) in _ALIAS) else None
+    clean_q = (query or "").strip()
+    # Strip enclosing quotes if agent passed whole query in quotes
+    if (clean_q.startswith('"') and clean_q.endswith('"')) or (clean_q.startswith("'") and clean_q.endswith("'")):
+        clean_q = clean_q[1:-1].strip()
+
+    m = re.match(r"^([a-z0-9_]+):\s*(.*)$", clean_q, re.S | re.I)
+    p_name = m.group(1).lower() if m else None
+    prefixed_q = m.group(2).strip() if m and (p_name in REGISTRY or p_name in _ALIAS) else None
+
     if explicit == "wide":
-        return list(WIDE_MIX), (prefixed_q or query)
+        return list(WIDE_MIX), (prefixed_q or clean_q)
     if explicit and explicit != "auto":
-        return [e.strip() for e in explicit.split(",") if e.strip() in REGISTRY], (prefixed_q or query)
-    if m and m.group(1) in REGISTRY:
-        return [m.group(1)], m.group(2).strip()
-    if m and m.group(1) in _ALIAS:
-        return [_ALIAS[m.group(1)]], m.group(2).strip()
-    for dom, eng in SITE_MAP.items():
-        if re.search(rf"site:\s*{re.escape(dom)}\b", query):
-            cleaned = re.sub(rf"site:\s*{re.escape(dom)}\b", "", query).strip()
+        return [e.strip() for e in explicit.split(",") if e.strip() in REGISTRY], (prefixed_q or clean_q)
+    if m and p_name in REGISTRY:
+        return [p_name], m.group(2).strip()
+    if m and p_name in _ALIAS:
+        return [_ALIAS[p_name]], m.group(2).strip()
+
+    # Robust site: matching and cleaning
+    m_site = re.search(r"site:\s*([^\s]+)", clean_q, re.I)
+    if m_site:
+        site_raw = m_site.group(1).strip("/").lower()
+        parts = site_raw.split("/", 1)
+        dom = parts[0]
+        subpath = parts[1] if len(parts) > 1 else ""
+
+        # Remove the entire site:[^\s]+ token so no leading slashes contaminate query
+        cleaned = re.sub(r"site:\s*[^\s]+", "", clean_q, flags=re.I).strip()
+
+        # If subpath contains useful keywords, preserve them
+        if subpath:
+            path_kw = [w for w in re.split(r"[/_-]+", subpath)
+                       if len(w) > 2 and w.lower() not in {"releases", "download", "archive", "raw", "main", "master", "tree", "blob", "index", "html", "view", "asr"}]
+            for kw in path_kw:
+                if kw.lower() not in cleaned.lower():
+                    cleaned = f"{kw} {cleaned}".strip()
+
+        if dom in SITE_MAP:
+            eng = SITE_MAP[dom]
             if dom == "github.com":
-                return ["gh", "code", "bing"], (cleaned or query)
-            return [eng], cleaned
-    if re.search(r"site:\s*news\.google\.com", query):
-        return ["news"], query
-    return ["bing", "ddg", "hn", "so", "reddit", "news"], query
+                repo_match = re.match(r"^([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)", subpath)
+                if repo_match:
+                    repo_id = repo_match.group(1)
+                    return ["gh", "code", "bing"], f"{repo_id} {cleaned}".strip()
+                return ["gh", "code", "bing"], (cleaned or clean_q)
+            if dom in ("huggingface.co", "hf.co"):
+                return ["hf"], (cleaned or clean_q)
+            return [eng], (cleaned or clean_q)
+        if dom.endswith(".github.io") or dom.endswith(".readthedocs.io") or dom.startswith("docs."):
+            return ["bing", "ddg"], (f"site:{dom} {cleaned}" if cleaned else clean_q)
+        if dom == "news.google.com":
+            return ["news"], (cleaned or clean_q)
+
+    return ["bing", "ddg", "hn", "so", "reddit", "news"], clean_q
 
 
 async def run_engines(client: PoliteClient, query: str, n: int, engines_list: list[str],

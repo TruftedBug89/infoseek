@@ -64,11 +64,13 @@ def _get_client(min_interval: float = 1.0, respect_robots: bool = True) -> Polit
 
 
 def _apply_site_filter(results: list[Result], query: str) -> list[Result]:
-    m = re.search(r"site:\s*([\w.-]+)", query)
+    m = re.search(r"site:\s*([^\s]+)", query)
     if not m:
         return results
-    dom = m.group(1).lower()
-    return [r for r in results if dom in (r.url or "").lower()]
+    site_spec = m.group(1).lower().strip("/")
+    dom = site_spec.split("/")[0]
+    filtered = [r for r in results if dom in (r.url or "").lower()]
+    return filtered if filtered else results
 
 
 _FRESH_ALIASES = {"day": 1, "week": 7, "month": 31, "year": 365}
