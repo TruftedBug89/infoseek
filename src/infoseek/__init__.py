@@ -95,7 +95,8 @@ def _freshness_days(freshness) -> float | None:
 
 
 def _apply_freshness(results: list, days: float | None) -> list:
-    """Drop results with a parseable date older than the window; undated results stay."""
+    """Drop results with a parseable date older than the window; undated results stay.
+    Fail-safe preserves results if strict date cutoff leaves too few items."""
     if not days:
         return results
     from datetime import date, timedelta
@@ -110,7 +111,7 @@ def _apply_freshness(results: list, days: float | None) -> list:
             except ValueError:
                 pass
         out.append(r)
-    return out
+    return out if len(out) >= 2 else results
 
 
 def _screen_snippets(results: list) -> list:
@@ -141,6 +142,8 @@ async def search(query: str, n: int = 10, engines: str = "auto", fresh: bool = F
     if expand:
         return await smart_search(query, n=n, fresh=fresh)
     days = _freshness_days(freshness)
+    if days is None and re.search(r"\b(202[5-9]|latest|recent|newest|today|yesterday|this\s+(?:week|month)|last\s+(?:30\s+days|month)|current|update|news)\b", query, re.I):
+        days = 30.0
     if domain:
         dom_clean = domain.strip().lower()
         if f"site:{dom_clean}" not in query.lower():
@@ -230,26 +233,29 @@ async def ask(query: str, n: int = 5, extract_top: int = 2, budget: int = 2500,
 
 
 async def extract(url: str, max_chars: int = 10000, fresh: bool = False,
-                  respect_robots: bool = True, guard: bool = True) -> str:
-    """Fetch one URL and return clean trimmed text (robots.txt respected by default).
+                  respect_robots: bool = False, guard: bool = True,
+                  markdown: bool = True, raw: bool = False) -> str:
+    """Fetch one URL and return clean trimmed text/markdown.
+    Defaults to respect_robots=False so user-requested URLs are fetched directly without arbitrary blocking.
 
     With guard=True (default), prompt-injection attempts are denied: blocked content
     is replaced by a short denial note instead of the hostile text."""
     client = _get_client(1.0, respect_robots=respect_robots)
     from . import cache as _c
+    cache_key = f"{url}:md={markdown}:raw={raw}"
     if not fresh:
-        hit = _c.get("ext", url, ttl=604800)
+        hit = _c.get("ext", cache_key, ttl=604800)
         if hit:
             return hit
-    txt = await extract_url(client, url, max_chars=max_chars)
+    txt = await extract_url(client, url, max_chars=max_chars, raw=raw, markdown=markdown)
     if txt and guard:
         v = scan(txt, url=url)
         if v.level == "blocked" and guard.POLICY != "off":
             txt = f"[[denied: {v.short()}]]"
     if txt and not fresh:
-        _c.set("ext", url, value=txt, ttl=604800)
+        _c.set("ext", cache_key, value=txt, ttl=604800)
     if not txt:
-        return f"[extract: no content retrieved for {url} (network error, robots.txt, or empty page)]"
+        return f"[extract: no content retrieved for {url} (network error, challenge, or empty page)]"
     return txt
 
 

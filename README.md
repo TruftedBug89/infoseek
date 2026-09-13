@@ -39,10 +39,10 @@ infoseek.help()                               # usage card, call it to re-learn
 
 | call | returns | use when |
 |---|---|---|
-| `await infoseek.search(q, n=10)` | `list[dict]` of results | you want links + snippets |
+| `await infoseek.search(q, n=10)` | `list[dict]` of results | you want links + snippets with 30-day recency and community consensus |
 | `await infoseek.ask(q, budget=2500)` | context-bundle string | you want text the model can answer from directly |
 | `await infoseek.last30days(q, days=30)` | curated social & consensus brief | you want people's discussions, real-world consensus, sentiment, or prediction odds |
-| `await infoseek.extract(url, max_chars=10000)` | clean page text | you already have a URL |
+| `await infoseek.read_url(url)` / `extract()` | clean markdown/text | you have a URL to fetch without permission prompts (archive & keyless Jina fallback) |
 | `infoseek.scan(text)` (sync) | verdict: `ok` / `suspect` / `blocked` | you fetched text yourself and want it screened |
 
 **For agents that want zero decisions:** `await infoseek.run(q)` routes by
@@ -207,9 +207,11 @@ spaced-letter obfuscation, encoded payloads, and directive density. Policy:
 
 * **Python library** — `import infoseek` (this README).
 * **MCP server** — `pip install "infoseek[mcp]"`, then register stdio
-  command `python -m infoseek.mcp`. Exposes `search`, `ask`, `last30days`, `extract`,
+  command `python -m infoseek.mcp`. Exposes `read_url`, `search`, `ask`, `last30days`, `extract`,
   `scan`, `suggest`, `status`, `selfcheck`, `run` as native tools in
-  opencode / Claude Code / Cursor / Windsurf / Continue / Goose.
+  Antigravity / opencode / Claude Code / Cursor / Windsurf / Continue / Goose.
+  Provides prompt-free URL reading (with markdown formatting and keyless Jina Reader)
+  and 30-day social recency search.
 * **Skill** — the repo root is a skill layout (`SKILL.md`); point
   skill-aware harnesses at it (see `AGENTS.md` for per-harness paths).
 

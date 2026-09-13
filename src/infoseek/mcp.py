@@ -29,10 +29,12 @@ import infoseek
 mcp = FastMCP(
     "infoseek",
     instructions=(
-        "Keyless web research, AI model search, and social listening: multi-engine search (Bing, DDG, HF, HN, Reddit, News, ArXiv, GitHub), "
-        "LLM-ready context bundles (ask), last30days recency/social research (Reddit, HN, Polymarket), clean page/code extraction (read_url, extract), "
-        "and prompt-injection guard. Prefix queries with hf: for Hugging Face models/quants/datasets, gh: for GitHub repos, "
-        "reddit: for community discussions. Prefer ask() for factual research bundles. Prefer read_url() for fetching full web articles or code. "
+        "PRIMARY INTERNET RESEARCH & URL READING SYSTEM: Multi-engine web search (Bing, DDG, HF, HN, Reddit, News, ArXiv, GitHub), "
+        "recency grounding and 30-day community consensus (Reddit, HN, Polymarket, Techmeme), clean page/code/doc extraction (read_url, extract), "
+        "and prompt-injection defense. Use read_url() for fetching any web article, documentation, or code without permission prompts (converts HTML to clean Markdown with code blocks). "
+        "Use search() for multi-engine searches with recency and community consensus. Use ask() for LLM-ready context bundles. "
+        "Use last30days() for deep community sentiment, reviews, or market odds. "
+        "Prefix queries when needed: hf: (Hugging Face models/quants), gh: (GitHub repos), reddit: (community takes), hn: (Hacker News), news: (Google News). "
         "Feed extraction/bundle output to the model as-is; blocked injection content is already replaced with [[denied: ...]] notes."
     ),
 )
@@ -44,10 +46,11 @@ def _json(obj) -> str:
 
 @mcp.tool()
 async def search(query: str = "", q: str = "", Query: str = "", n: int = 10, engines: str = "auto", fresh: bool = False,
-                 freshness: str | None = None, domain: str = "", Domain: str = "", compact: bool = False) -> str:
-    """Multi-engine web search. Returns JSON: [{title, url, snippet, source, rank, score}].
-    query: search text; engine prefixes (hf:, gh:, reddit:, hn:, so:, news:, wiki:, arxiv:, code:,
-    wayback:, commoncrawl:, swarm:, error:, compat:, ...) focus the source.
+                 freshness: str | None = None, domain: str = "", Domain: str = "", compact: bool = False,
+                 include_social: bool = True) -> str:
+    """Multi-engine web search with 30-day recency grounding and community consensus (Bing, DDG, HF, Reddit, HN, Techmeme, Google News, arXiv, GitHub).
+    Direct drop-in replacement and upgrade for search_web.
+    query: search text; engine prefixes (hf:, gh:, reddit:, hn:, so:, news:, wiki:, arxiv:, code:, wayback:, ...) focus the source.
     domain: optional domain filter to restrict search (e.g. 'github.com', 'huggingface.co', 'docs.python.org').
     compact: return only essential fields ({title, url, snippet}) to save token context.
     n: max results (default 10). engines: 'auto', 'wide' (maximum coverage), or comma-separated.
@@ -125,29 +128,40 @@ async def last30days(query: str = "", q: str = "", days: int = 30, n: int = 8,
 
 
 @mcp.tool()
-async def extract(url: str = "", uri: str = "", Url: str = "", URI: str = "", max_chars: int = 10000, fresh: bool = False) -> str:
-    """Fetch one URL and return clean, trimmed page text (robots.txt respected).
+async def extract(url: str = "", uri: str = "", Url: str = "", URI: str = "", max_chars: int = 10000,
+                  markdown: bool = True, raw: bool = False, fresh: bool = False) -> str:
+    """Fetch one URL and return clean, trimmed page text or markdown without permission prompts.
     Prompt-injection content is denied and replaced with a [[denied: ...]] note.
-    url: full URL. max_chars: max characters returned (default 10000; 0 for full page). fresh: bypass the 7-day cache."""
+    url / Url: full URL. max_chars: max characters returned (default 10000; 0 for full page).
+    markdown: format output as clean Markdown with code blocks (default True).
+    raw: return raw source without formatting (default False).
+    fresh: bypass the 7-day cache."""
     target_url = (url or uri or Url or URI or "").strip()
     if not target_url:
         return "[[extract error: Empty URL]]"
     try:
-        return await infoseek.extract(target_url, max_chars=max_chars, fresh=fresh)
+        return await infoseek.extract(target_url, max_chars=max_chars, fresh=fresh,
+                                      respect_robots=False, markdown=markdown, raw=raw)
     except Exception as e:
         return f"[[extract error: {type(e).__name__}: {e}]]"
 
 
 @mcp.tool()
-async def read_url(url: str = "", Url: str = "", uri: str = "", URI: str = "", max_chars: int = 25000, fresh: bool = False) -> str:
-    """Fetch content from a URL via HTTP and return clean page content/markdown.
-    Drop-in alternative to read_url_content with prompt-injection screening and Wayback archive fallback.
-    url: target web page URL. max_chars: maximum characters returned (default 25000)."""
+async def read_url(url: str = "", Url: str = "", uri: str = "", URI: str = "", max_chars: int = 30000,
+                   markdown: bool = True, raw: bool = False, fresh: bool = False) -> str:
+    """Fetch content from a URL via HTTP and return clean page content/markdown without permission prompts.
+    Direct drop-in replacement and upgrade for read_url_content with prompt-injection screening, clean Markdown formatting,
+    and automatic archive (Wayback) and JS-reader (Jina) fallbacks.
+    Url / url: target web page URL. max_chars: maximum characters returned (default 30000; 0 for unlimited).
+    markdown: format output as clean Markdown with headers and code fences (default True).
+    raw: return raw source without formatting (default False).
+    fresh: bypass the 7-day cache."""
     target_url = (url or Url or uri or URI or "").strip()
     if not target_url:
         return "[[read_url error: Empty URL]]"
     try:
-        return await infoseek.extract(target_url, max_chars=max_chars, fresh=fresh)
+        return await infoseek.extract(target_url, max_chars=max_chars, fresh=fresh,
+                                      respect_robots=False, markdown=markdown, raw=raw)
     except Exception as e:
         return f"[[read_url error: {type(e).__name__}: {e}]]"
 

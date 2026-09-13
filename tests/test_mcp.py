@@ -82,3 +82,20 @@ def test_mcp_compact_search(monkeypatch):
     assert set(data[0].keys()) == {"title", "url", "snippet"}
 
 
+def test_mcp_read_url_options(monkeypatch):
+    captured = {}
+    async def fake_extract(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return "# Markdown Title\n\nArticle content"
+
+    monkeypatch.setattr(mcp.infoseek, "extract", fake_extract)
+    out = asyncio.run(mcp.read_url(Url="https://example.com/post", max_chars=5000, markdown=True, raw=False))
+    assert "# Markdown Title" in out
+    assert captured["url"] == "https://example.com/post"
+    assert captured["respect_robots"] is False
+    assert captured["markdown"] is True
+    assert captured["raw"] is False
+
+
+

@@ -63,3 +63,42 @@ def test_resolve_engines_hf_and_site_path():
     assert "sherpa-onnx-whisper" in q3
 
 
+def test_html_to_text_markdown():
+    from infoseek.extract import _html_to_text
+    html = (
+        "<html><body>"
+        "<h1>Sample Documentation</h1>"
+        "<p>" + ("This is a rich documentation paragraph explaining Python async functions and network clients. " * 3) + "</p>"
+        "<pre><code>async def fetch(): pass</code></pre>"
+        "</body></html>"
+    )
+    md_out = _html_to_text(html, "https://docs.example.com", 2000, markdown=True)
+    assert "fetch" in md_out
+    assert len(md_out) > 50
+
+
+def test_jina_keyless_headers(monkeypatch):
+    import asyncio
+    from infoseek.extract import _jina_extract
+    from infoseek.net import PoliteClient
+
+    requested = {}
+
+    class FakeClient(PoliteClient):
+        async def get(self, url, **kwargs):
+            requested["url"] = url
+            requested["headers"] = kwargs.get("headers", {})
+            class FakeResp:
+                status_code = 200
+                text = "Extracted Jina Markdown Content"
+            return FakeResp()
+
+    fc = FakeClient()
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    out = asyncio.run(_jina_extract(fc, "https://example.com/docs", 1000))
+    assert out == "Extracted Jina Markdown Content"
+    assert requested["url"] == "https://r.jina.ai/https://example.com/docs"
+    assert "Accept" in requested["headers"]
+
+
+

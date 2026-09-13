@@ -102,9 +102,11 @@ def _recency_bonus(r: Result) -> float:
     except ValueError:
         return 0.0
     if age < 7:
-        return 3.0
+        return 3.5
     if age < 30:
-        return 1.5
+        return 2.0
+    if age < 90:
+        return 1.0
     if age < 180:
         return 0.5
     return 0.0
@@ -126,7 +128,11 @@ def _engagement_bonus(r: Result) -> float:
     total = up + cm * 2
     if total <= 0:
         return 0.0
-    return min(3.5, math.log10(total + 1) * 0.9)
+    base = min(3.5, math.log10(total + 1) * 0.9)
+    # 30-day community synergy bonus: active fresh community posts float up
+    if r.source in ("reddit", "hn", "techmeme", "bluesky", "polymarket") and _recency_bonus(r) >= 2.0:
+        base += 1.5
+    return base
 
 
 def merge(groups: list[list[Result]], n: int, order: list[str]) -> list[Result]:
@@ -164,6 +170,10 @@ def to_dicts(results: list[Result]) -> list[dict]:
         if isinstance(d.get("title"), str):
             d["title"] = _html.unescape(d["title"])
         if isinstance(d.get("snippet"), str):
-            d["snippet"] = _html.unescape(d["snippet"])
+            snip = _html.unescape(d["snippet"])
+            if r.source in ("reddit", "hn", "polymarket", "techmeme", "bluesky", "so") and r.extra:
+                if not snip.startswith("["):
+                    snip = f"[{r.extra}] {snip}"
+            d["snippet"] = snip
         out.append(d)
     return out

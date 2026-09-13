@@ -99,15 +99,20 @@ def research(query: str, budget: int = 1500, fresh: bool = False) -> str:
         return f"[[research error: {type(e).__name__}: {e}]]"
 
 
-def read(url: str, max_chars: int = 2000, fresh: bool = False) -> str:
-    """Fetch one URL and return its clean text (robots.txt respected).
+def read(url: str, max_chars: int = 10000, fresh: bool = False,
+         markdown: bool = True, raw: bool = False) -> str:
+    """Fetch one URL and return its clean text/markdown.
 
     Prompt-injection attempts are denied: hostile pages come back as
     [[denied: ...]] instead of the injected instructions."""
     from . import extract as _extract
 
     try:
-        out = _run(_extract(url, max_chars=max_chars, fresh=fresh))
+        try:
+            coro = _extract(url, max_chars=max_chars, fresh=fresh, markdown=markdown, raw=raw)
+        except TypeError:
+            coro = _extract(url, max_chars=max_chars, fresh=fresh)
+        out = _run(coro)
         return out or "[[empty page]]"
     except Exception as e:
         return f"[[read error: {type(e).__name__}: {e}]]"
