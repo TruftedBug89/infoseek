@@ -58,7 +58,7 @@ def clean_title(t: str) -> str:
     return t[:80]
 
 
-def clean(s: str, limit: int = 160) -> str:
+def clean(s: str, limit: int = 240) -> str:
     import html as _html
     s = _html.unescape(s or "")
     s = " ".join(s.split())
@@ -162,7 +162,7 @@ def merge(groups: list[list[Result]], n: int, order: list[str]) -> list[Result]:
     return dedupe(merged)[:n]
 
 
-def to_dicts(results: list[Result]) -> list[dict]:
+def to_dicts(results: list[Result], prune: bool = False) -> list[dict]:
     import html as _html
     out = []
     for r in results:
@@ -175,5 +175,13 @@ def to_dicts(results: list[Result]) -> list[dict]:
                 if not snip.startswith("["):
                     snip = f"[{r.extra}] {snip}"
             d["snippet"] = snip
+        if d.get("score") is not None:
+            try:
+                d["score"] = round(float(d["score"]), 2)
+            except (ValueError, TypeError):
+                pass
+        if prune:
+            # Drop empty/zero noise to maximize token efficiency for agents
+            d = {k: v for k, v in d.items() if v not in ("", 0, 0.0, None) or k in ("title", "url", "snippet", "source")}
         out.append(d)
     return out

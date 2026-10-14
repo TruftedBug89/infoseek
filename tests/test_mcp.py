@@ -98,4 +98,46 @@ def test_mcp_read_url_options(monkeypatch):
     assert captured["raw"] is False
 
 
+def test_mcp_pruned_search_efficiency(monkeypatch):
+    async def fake_search(query, **kwargs):
+        return [{
+            "title": "Pruned Hit",
+            "url": "https://example.com/item",
+            "snippet": "High signal snippet",
+            "source": "bing",
+            "rank": 0,
+            "date": "",
+            "extra": "",
+            "score": 10.12345678,
+            "upvotes": 0,
+            "comments": 0,
+            "engagement_str": "",
+        }]
+    monkeypatch.setattr(mcp.infoseek, "search", fake_search)
+    out = asyncio.run(mcp.search(query="test", compact=False))
+    data = json.loads(out)
+    assert len(data) == 1
+    # Noise/zero fields must be pruned
+    assert "date" not in data[0]
+    assert "extra" not in data[0]
+    assert "upvotes" not in data[0]
+    assert "comments" not in data[0]
+    assert "engagement_str" not in data[0]
+    # Score should be rounded to 2 decimals
+    assert data[0]["score"] == 10.12
 
+
+def test_mcp_format_markdown(monkeypatch):
+    async def fake_search(query, **kwargs):
+        return [{
+            "title": "MD Hit",
+            "url": "https://example.com/md",
+            "snippet": "Clean snippet",
+            "source": "bing",
+            "score": 10.0,
+        }]
+    monkeypatch.setattr(mcp.infoseek, "search", fake_search)
+    out = asyncio.run(mcp.search(query="test", format="markdown"))
+    assert isinstance(out, str)
+    assert "1. **MD Hit**" in out
+    assert "https://example.com/md" in out

@@ -60,3 +60,28 @@ def test_to_dicts_prepends_community_extra():
     assert dicts[0]["snippet"].startswith("[r/python · 35 upvotes]")
     assert dicts[1]["snippet"] == "Standard docs"
 
+
+def test_clean_default_limit_240():
+    text = "word " * 100
+    cleaned = clean(text)
+    assert len(cleaned) <= 245
+    assert len(cleaned) > 200
+
+
+def test_to_dicts_pruning_and_score_rounding():
+    from infoseek.rank import to_dicts
+    res = [
+        Result("Title", "https://example.com", snippet="Hi", source="bing", score=9.87654),
+        Result("Social", "https://reddit.com", snippet="Yo", source="reddit", score=12.1, upvotes=15, comments=3),
+    ]
+    unpruned = to_dicts(res, prune=False)
+    assert unpruned[0]["score"] == 9.88
+    assert "extra" in unpruned[0]
+
+    pruned = to_dicts(res, prune=True)
+    assert pruned[0]["score"] == 9.88
+    assert "extra" not in pruned[0]
+    assert "date" not in pruned[0]
+    assert pruned[1]["upvotes"] == 15
+    assert pruned[1]["comments"] == 3
+

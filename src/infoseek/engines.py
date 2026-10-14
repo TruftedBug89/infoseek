@@ -64,11 +64,17 @@ async def ddg(c, q, n):
     out = await _ddg_fetch(c, q, n)
     if out:
         return out, None
+    # Bot challenge / rate-limit: fall back to DDG Lite mobile endpoint (bypasses JS challenge)
+    out = await _ddg_lite_fetch(c, q, n)
+    if out:
+        return out, None
     # Possible UA challenge: retry once with a different browser UA on a fresh client.
     try:
         c2 = PoliteClient(min_interval=c.min_interval, ua=next(u for u in UAS if u != c.ua))
         try:
             out = await _ddg_fetch(c2, q, n)
+            if not out:
+                out = await _ddg_lite_fetch(c2, q, n)
             return out, (None if out else "ddg: no results parsed (rate-limited or challenge)")
         finally:
             await c2.close()
@@ -1284,6 +1290,8 @@ async def commoncrawl(c, q, n):
     q = (q or "").strip()
     if not q:
         return [], "commoncrawl: empty query"
+    if "." not in q and "/" not in q:
+        return [], "commoncrawl: query should be a domain or URL pattern (e.g. example.com/*)"
     idx = await _cc_index_id(c)
     if not idx:
         return [], "commoncrawl: index unavailable"

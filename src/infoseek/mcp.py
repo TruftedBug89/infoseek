@@ -44,15 +44,41 @@ def _json(obj) -> str:
     return json.dumps(obj, ensure_ascii=False)
 
 
+def _prune_result(r: dict) -> dict:
+    d = {
+        "title": r.get("title", ""),
+        "url": r.get("url", ""),
+        "snippet": r.get("snippet", ""),
+        "source": r.get("source", ""),
+    }
+    if r.get("date"):
+        d["date"] = r["date"]
+    if r.get("extra"):
+        d["extra"] = r["extra"]
+    if r.get("score") is not None:
+        try:
+            d["score"] = round(float(r["score"]), 2)
+        except (ValueError, TypeError):
+            pass
+    if r.get("upvotes"):
+        d["upvotes"] = r["upvotes"]
+    if r.get("comments"):
+        d["comments"] = r["comments"]
+    if r.get("engagement_str"):
+        d["engagement_str"] = r["engagement_str"]
+    return d
+
+
 @mcp.tool()
 async def search(query: str = "", q: str = "", Query: str = "", n: int = 10, engines: str = "auto", fresh: bool = False,
                  freshness: str | None = None, domain: str = "", Domain: str = "", compact: bool = False,
-                 include_social: bool = True) -> str:
+                 include_social: bool = True, format: str = "json") -> str:
     """Multi-engine web search with 30-day recency grounding and community consensus (Bing, DDG, HF, Reddit, HN, Techmeme, Google News, arXiv, GitHub).
     Direct drop-in replacement and upgrade for search_web.
     query: search text; engine prefixes (hf:, gh:, reddit:, hn:, so:, news:, wiki:, arxiv:, code:, wayback:, ...) focus the source.
     domain: optional domain filter to restrict search (e.g. 'github.com', 'huggingface.co', 'docs.python.org').
     compact: return only essential fields ({title, url, snippet}) to save token context.
+    format: 'json' (structured list) or 'text'/'markdown' (clean token-efficient Markdown list).
     n: max results (default 10). engines: 'auto', 'wide' (maximum coverage), or comma-separated.
     fresh: bypass the 30-min cache. freshness: recency limit ('day'|'week'|'month'|'year'|'7d');
     blocked snippets are dropped, suspect ones flagged in extra."""
@@ -70,18 +96,26 @@ async def search(query: str = "", q: str = "", Query: str = "", n: int = 10, eng
         return _json({"error": f"{type(e).__name__}: {e}"})
     if not results:
         return _json({"results": [], "hint": infoseek.no_results_hint(target_q, engines, freshness)})
+    if format in ("text", "markdown", "md"):
+        return infoseek.format.fmt_search([infoseek.Result(**r) for r in results])
     if compact:
         results = [{"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("snippet", "")} for r in results]
+    else:
+        results = [_prune_result(r) for r in results]
     return _json(results)
 
 
 @mcp.tool()
-async def search_many(queries: list[str], n: int = 6, freshness: str | None = None) -> str:
+async def search_many(queries: list[str], n: int = 6, freshness: str | None = None, format: str = "json") -> str:
     """Run several query variants CONCURRENTLY and return one merged, deduped, ranked
-    JSON result list. Use for iterative research: multiple phrasings in one round-trip.
-    freshness: optional recency limit ('day'|'week'|'month'|'year'|'7d')."""
+    result list. Use for iterative research: multiple phrasings in one round-trip.
+    freshness: optional recency limit ('day'|'week'|'month'|'year'|'7d').
+    format: 'json' (default) or 'text'/'markdown'."""
     try:
-        return _json(await infoseek.search_many(queries, n=n, freshness=freshness))
+        res = await infoseek.search_many(queries, n=n, freshness=freshness)
+        if format in ("text", "markdown", "md"):
+            return infoseek.format.fmt_search([infoseek.Result(**r) for r in res])
+        return _json([_prune_result(r) for r in res])
     except Exception as e:
         return _json({"error": f"{type(e).__name__}: {e}"})
 

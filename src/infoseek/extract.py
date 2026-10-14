@@ -57,6 +57,8 @@ def _meta_desc(html: str) -> str:
 def _trim(text: str, max_chars: int) -> str:
     if not text:
         return ""
+    # Collapse multiple blank lines to save context tokens
+    text = re.sub(r"\n{3,}", "\n\n", text)
     if max_chars <= 0:
         return text.strip()
     text = re.sub(r"[ \t]+", " ", text).strip()
@@ -504,14 +506,20 @@ _RAW_EXTENSIONS = {
 async def _access_ladder(client: PoliteClient, url: str, path: str, max_chars: int,
                          raw: bool = False, markdown: bool = True) -> str:
     """Generic-page access ladder: origin first (robots-respected if configured),
-    then public archives and keyless Jina Reader. Archive and Jina fetches never touch
-    the origin site, allowing bot-blocked or JS-rendered pages to be read cleanly."""
-    if not client.respect_robots or await client.allowed(url):
+    then keyless Jina Reader (for failed/bot-blocked live pages) and Wayback Machine archive.
+    Archive and Jina fetches never touch the origin site directly."""
+    origin_allowed = not client.respect_robots or await client.allowed(url)
+    if origin_allowed:
         txt = await _live_extract(client, url, path, max_chars, raw=raw, markdown=markdown)
         if txt:
             return txt
+        # Live origin was allowed but failed/blocked: try Jina Reader for live Markdown
+        txt = await _jina_extract(client, url, max_chars)
+        if txt:
+            return txt
+    # Wayback Machine archive (for disallows or pages not reachable via Jina)
     txt = await _wayback_extract(client, url, max_chars, markdown=markdown)
-    if not txt:
+    if not txt and not origin_allowed:
         txt = await _jina_extract(client, url, max_chars)
     return txt
 
