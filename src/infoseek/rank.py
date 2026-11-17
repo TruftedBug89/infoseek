@@ -135,8 +135,47 @@ def _engagement_bonus(r: Result) -> float:
     return base
 
 
-def merge(groups: list[list[Result]], n: int, order: list[str]) -> list[Result]:
-    """Score-driven merge: priority + rank + recency + engagement, with per-source diversity cap."""
+_STOP_WORDS = {
+    "a", "an", "the", "and", "or", "of", "to", "in", "for", "on", "with", "at",
+    "by", "from", "up", "about", "into", "over", "after", "is", "are", "was",
+    "were", "be", "been", "being", "have", "has", "had", "do", "does", "did",
+    "how", "what", "why", "when", "where", "who", "which", "this", "that"
+}
+
+
+def _term_match_score(r: Result, query: str) -> float:
+    """Calculate query keyword overlap and penalize off-topic noise / generic portals."""
+    if not query:
+        return 0.0
+    terms = [w for w in re.split(r"\W+", query.lower()) if len(w) > 2 and w not in _STOP_WORDS]
+    if not terms:
+        return 0.0
+
+    t_lower = (r.title or "").lower()
+    s_lower = (r.snippet or "").lower()
+    u_lower = (r.url or "").lower()
+
+    t_matches = sum(1 for t in terms if t in t_lower)
+    s_matches = sum(1 for t in terms if t in s_lower)
+    u_matches = sum(1 for t in terms if t in u_lower)
+
+    score = t_matches * 1.5 + s_matches * 1.0 + u_matches * 0.5
+
+    # Penalize off-topic noise if query has multiple substantive terms
+    if len(terms) >= 2 and (t_matches + s_matches) == 0:
+        score -= 3.5
+
+    # Penalize generic root/portal pages when query is detailed
+    p = urlparse(r.url)
+    if p.path in ("", "/", "/wiki/Main_Page", "/wiki/Portada", "/index.html", "/index.php"):
+        if len(terms) >= 2:
+            score -= 3.0
+
+    return score
+
+
+def merge(groups: list[list[Result]], n: int, order: list[str], query: str = "") -> list[Result]:
+    """Score-driven merge: priority + rank + recency + engagement + query terms, with per-source diversity cap."""
     by_src: dict[str, list[Result]] = {}
     for g in groups:
         for r in g:
@@ -144,7 +183,9 @@ def merge(groups: list[list[Result]], n: int, order: list[str]) -> list[Result]:
     scored: list[Result] = []
     for src, lst in by_src.items():
         for r in lst:
-            r.score = PRIORITY.get(src, 5) - r.rank * 1.6 + _recency_bonus(r) + _engagement_bonus(r)
+            r.score = (PRIORITY.get(src, 5) - r.rank * 1.6 +
+                       _recency_bonus(r) + _engagement_bonus(r) +
+                       _term_match_score(r, query))
             if not r.snippet and src not in ("code", "gh"):
                 r.score -= 2.0
             scored.append(r)

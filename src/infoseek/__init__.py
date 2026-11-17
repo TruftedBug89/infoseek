@@ -156,7 +156,7 @@ async def search(query: str, n: int = 10, engines: str = "auto", fresh: bool = F
                                         fresh=fresh, freshness_days=days)
     _last_errors.update(errors)
     results = _apply_freshness(_apply_site_filter(results, query), days)
-    merged = merge([results], n, engines_list + [e for e in KEYLESS if e not in engines_list])
+    merged = merge([results], n, engines_list + [e for e in KEYLESS if e not in engines_list], query=q)
     res_dicts = to_dicts(_screen_snippets(merged))
 
     # Automatic query relaxation fallback:
@@ -170,7 +170,7 @@ async def search(query: str, n: int = 10, engines: str = "auto", fresh: bool = F
                                                fresh=True, freshness_days=days)
             if rel_results:
                 rel_results = _apply_freshness(_apply_site_filter(rel_results, query), days)
-                merged = merge([rel_results], n, engines_list + [e for e in KEYLESS if e not in engines_list])
+                merged = merge([rel_results], n, engines_list + [e for e in KEYLESS if e not in engines_list], query=relaxed_q)
                 res_dicts = to_dicts(_screen_snippets(merged))
 
     return res_dicts
@@ -191,7 +191,7 @@ async def search_many(queries, n: int = 6, engines: str = "auto", fresh: bool = 
         for r in g:
             if r.source not in order:
                 order.append(r.source)
-    merged = merge(groups, min(n * len(groups), 24), order)
+    merged = merge(groups, min(n * len(groups), 24), order, query=" ".join(queries))
     return to_dicts(_screen_snippets(merged))
 
 
@@ -211,7 +211,7 @@ async def ask(query: str, n: int = 5, extract_top: int = 2, budget: int = 2500,
     results, errors = await run_engines(client, q, n=max(n + 2, 6), engines_list=engines_list,
                                         fresh=fresh, freshness_days=days)
     results = _apply_freshness(_apply_site_filter(results, query), days)
-    merged = merge([results], n, engines_list + [e for e in KEYLESS if e not in engines_list])
+    merged = merge([results], n, engines_list + [e for e in KEYLESS if e not in engines_list], query=q)
     targets = _pick_targets(merged, q, extract_top)
     per_page = max(500, budget * 4 // max(extract_top, 1) - 250)
     extr = await extract_many(client, [r.url for r in targets], max_chars=per_page,
@@ -359,13 +359,17 @@ __all__ = ["run", "help", "no_results_hint", "search", "search_many", "smart_sea
 
 def _pick_targets(merged: list, query: str, k: int) -> list:
     """Choose extraction targets: highest merged score, boosted by query-term presence
-    in snippet/title, penalized for redirect wrappers; one per domain."""
+    in snippet/title, penalized for redirect wrappers and generic homepages; one per domain."""
     terms = [x for x in re.split(r"\W+", query.lower()) if len(x) > 2]
     scored = []
     for r in merged:
         s = r.score
         if "news.google.com" in r.url:
             s -= 3.0
+        p = urlparse(r.url)
+        if p.path in ("", "/", "/wiki/Main_Page", "/wiki/Portada", "/index.html", "/index.php"):
+            if len(terms) >= 2:
+                s -= 4.0
         blob = ((r.snippet or "") + " " + r.title).lower()
         if terms and any(x in blob for x in terms):
             s += 2.0

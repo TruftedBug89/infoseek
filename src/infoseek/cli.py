@@ -165,7 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
     l30.add_argument("--json", action="store_true", help="structured JSON output")
     l30.set_defaults(func=cmd_last30days)
 
-    e = sub.add_parser("extract", help="clean text from a URL (guard denies injection content)")
+    e = sub.add_parser("extract", aliases=["read"], help="clean text from a URL (guard denies injection content)")
     e.add_argument("url")
     e.add_argument("--max-chars", type=int, default=2000)
     e.add_argument("--fresh", action="store_true")

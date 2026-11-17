@@ -8,7 +8,8 @@ from .research import (auto_focus, VERSION_RE, COMPAT_WORDS, ERROR_WORDS,
                        SOLUTION_WORDS)
 
 def _sanitize_html(html: str) -> str:
-    """Strip hidden CSS/DOM elements (honeypots & hidden injection vectors)."""
+    """Strip hidden CSS/DOM elements (honeypots & hidden injection vectors),
+    cookie consent banners, login/signup popups, and donation notices."""
     try:
         soup = BeautifulSoup(html, "lxml")
         # Remove explicitly hidden elements
@@ -23,6 +24,20 @@ def _sanitize_html(html: str) -> str:
         # Drop image tags to avoid Markdown exfiltration
         for img in soup.find_all("img"):
             img.decompose()
+
+        # Decompose cookie banners, consent SDKs, login modals, and donation banners
+        _JUNK_SELECTORS = (
+            "#onetrust-consent-sdk, #onetrust-banner-sdk, .onetrust-pc-dark, "
+            ".cookie-banner, .cookie-notice, .cookie-consent, #cookie-law-info-bar, "
+            ".cc-window, .cc-banner, #CybotCookiebotDialog, "
+            "#centralNotice, .frb, .frb-nag, #siteNotice, "  # Wikipedia donation banners
+            ".js-consent-banner, .s-popover, .hero-content, .js-dismissable-hero, "  # StackOverflow login hero
+            ".top-bar, .s-topbar, .site-header, header, nav, #header, #nav, "  # Header nav and menus
+            ".login-modal, .signup-modal, .auth-modal, .newsletter-popup, .newsletter-signup"
+        )
+        for el in soup.select(_JUNK_SELECTORS):
+            el.decompose()
+
         return str(soup)
     except Exception:
         return html
@@ -705,6 +720,8 @@ def relevant_sentences(text: str, query: str, max_chars: int = 1200,
     if focus is None:
         focus = auto_focus(query)
 
+    _NAV_CHUNK = re.compile(r"^\[(?:Log in|Sign up|Skip to main content|Skip to content|Home|Navigation|Menu)\]", re.I)
+
     # Preserve fenced code blocks as atomic chunks, split prose on paragraphs or sentence boundaries
     raw_chunks = []
     code_pattern = re.compile(r"```[\s\S]*?```")
@@ -714,7 +731,7 @@ def relevant_sentences(text: str, query: str, max_chars: int = 1200,
         if pre:
             for p in re.split(r"(?<=[.!?])\s+|\n{2,}", pre):
                 p_clean = p.strip()
-                if p_clean:
+                if p_clean and not _NAV_CHUNK.search(p_clean):
                     raw_chunks.append(p_clean)
         raw_chunks.append(match.group(0).strip())
         last_idx = match.end()
@@ -722,7 +739,7 @@ def relevant_sentences(text: str, query: str, max_chars: int = 1200,
     if rest:
         for p in re.split(r"(?<=[.!?])\s+|\n{2,}", rest):
             p_clean = p.strip()
-            if p_clean:
+            if p_clean and not _NAV_CHUNK.search(p_clean):
                 raw_chunks.append(p_clean)
 
     if not raw_chunks:

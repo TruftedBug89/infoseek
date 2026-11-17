@@ -40,8 +40,14 @@ async def bing(c, q, n):
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
     }
+    params = {
+        "q": q,
+        "count": max(n, 10),
+        "setlang": "en-US",
+        "mkt": "en-US",
+    }
     try:
-        r = await c.get("https://www.bing.com/search", params={"q": q, "count": max(n, 10)}, headers=headers, timeout=8)
+        r = await c.get("https://www.bing.com/search", params=params, headers=headers, timeout=5)
         if r.status_code != 200:
             return [], f"bing http {r.status_code}"
         soup = BeautifulSoup(r.text, "lxml")
@@ -54,6 +60,11 @@ async def bing(c, q, n):
                 title = h2.get_text(" ", strip=True)
                 snip = p.get_text(" ", strip=True) if p else ""
                 if href.startswith("http") and not href.startswith("https://www.bing.com"):
+                    # Filter out generic Wikipedia main pages unless specifically querying Wikipedia
+                    p_url = urlparse(href)
+                    if p_url.netloc.endswith("wikipedia.org") and p_url.path in ("", "/", "/wiki/Main_Page", "/wiki/Portada"):
+                        if "wikipedia" not in q.lower():
+                            continue
                     out.append(Result(title=title, url=href, snippet=clean(snip), source="bing", rank=i))
         return out, (None if out else "bing: no results parsed")
     except Exception as exc:

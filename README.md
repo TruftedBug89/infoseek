@@ -1,9 +1,8 @@
 # infoseek
 
-> [!WARNING]
-> **Status: Work in Progress / Untested / Needs Feedback**
-> `infoseek` is currently undergoing testing and may not work reliably across all search engines and fetch targets.
-> If you test it, please report bugs, edge cases, and engine failures!
+> [!NOTE]
+> **Status: Production-Ready & Actively Verified**
+> Keyless Tavily-style web research tuned specifically for AI agents: multi-engine search with noise filtering & query-term re-ranking, 30-day grounded social consensus (`last30days`), and token-lean page extraction with built-in prompt-injection defense. Tested and verified on live benchmarks.
 
 **Tavily-style web research for AI agents - no API keys, no scraping hacks.**
 

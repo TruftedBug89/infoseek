@@ -101,4 +101,24 @@ def test_jina_keyless_headers(monkeypatch):
     assert "Accept" in requested["headers"]
 
 
+def test_sanitize_html_removes_banners_and_modals():
+    from infoseek.extract import _sanitize_html
+    raw_html = (
+        "<html><body>"
+        "<div id='onetrust-consent-sdk'>Cookie Notice</div>"
+        "<div id='centralNotice'>Donate to Wikipedia</div>"
+        "<div class='js-consent-banner'>StackOverflow Cookie</div>"
+        "<div class='hero-content'>Sign up or log in to customize</div>"
+        "<article><p>Here is the real technical content that matters.</p></article>"
+        "</body></html>"
+    )
+    sanitized = _sanitize_html(raw_html)
+    assert "Cookie Notice" not in sanitized
+    assert "Donate to Wikipedia" not in sanitized
+    assert "StackOverflow Cookie" not in sanitized
+    assert "Sign up or log in" not in sanitized
+    assert "real technical content" in sanitized
+
+
+
 

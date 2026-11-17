@@ -85,3 +85,14 @@ def test_to_dicts_pruning_and_score_rounding():
     assert pruned[1]["upvotes"] == 15
     assert pruned[1]["comments"] == 3
 
+
+def test_term_match_and_noise_penalization():
+    r_relevant = Result("uv vs Poetry in 2026", "https://techloghub.com/uv-vs-poetry", snippet="Comparison of uv and poetry python package managers", source="ddg")
+    r_noise = Result("Universidad de Valencia", "https://uv.es/", snippet="Portal oficial de la Universidad", source="bing")
+    
+    query = "uv vs poetry python package manager"
+    merged = merge([[r_noise, r_relevant]], 2, ["ddg", "bing"], query=query)
+    assert merged[0].url == "https://techloghub.com/uv-vs-poetry"
+    assert merged[0].score > merged[1].score
+
+
