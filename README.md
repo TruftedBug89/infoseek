@@ -1,5 +1,10 @@
 # infoseek
 
+> [!WARNING]
+> **Status: Work in Progress / Untested / Needs Feedback**
+> `infoseek` is currently undergoing testing and may not work reliably across all search engines and fetch targets.
+> If you test it, please report bugs, edge cases, and engine failures!
+
 **Tavily-style web research for AI agents - no API keys, no scraping hacks.**
 
 `infoseek` gives LLM agents the same primitives as paid search services:
